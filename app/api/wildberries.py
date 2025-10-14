@@ -1,11 +1,13 @@
-from dependency_injector.wiring import Provide
+from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header
 
 from app.containers import Container
+from app.core.task_manager import TaskManager
 from app.core.wb_client import WildberriesClient
-from app.schemas.wildberries import ProductFilters
+from app.schemas.task import GetTaskRequest
+from app.utils.jwt import is_valid_token
 
-router = APIRouter(prefix="/wb", tags=["wb"])
+router = APIRouter(prefix="/api", )
 
 
 def get_wb_token(x_wb_token: str = Header(..., description="WB API токен")) -> str:
@@ -15,38 +17,69 @@ def get_wb_token(x_wb_token: str = Header(..., description="WB API токен"))
     return x_wb_token
 
 
-@router.get("/health", tags=["Health"])
-async def health_check():
-    """Health check эндпоинт"""
-    return {"status": "healthy", "service": "wb-api-proxy"}
+@router.get("/auth/check_token", tags=["authentication"])
+async def check_token(
+        token: str = Depends(get_wb_token)
+):
+    """
+    Проверяем валидность токена
+    :arg
+        token: токен wb
+
+    :return
+        Параметры токена
+    """
+    return is_valid_token(token)
 
 
-@router.get("/products", tags=["Products"])
-async def get_products(
-        filters: ProductFilters = Depends(),
+@router.get("/product/sample", tags=["products"])
+@inject
+async def get_product(
         token: str = Depends(get_wb_token),
         wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
     """
-    Получение списка товаров с фильтрами.
+    Получение 1 товара.
 
-    Args:
-        search: Поиск по названию товара
-        limit: Количество товаров (1-1000)
-        offset: Смещение для пагинации
-        X-WB-Token: WB API токен в заголовке
+    :arg
+        token: токен wb в заголовке
 
-    Returns:
-        Список товаров в формате WB API
+    :return
+        1 товар
     """
 
-    return await wb_client.get_products(
-        token=token,
-        search=filters.search,
-        limit=filters.limit,
-        offset=filters.offset
-    )
+    return await wb_client.get_product(token=token)
 
+
+@router.post("/product/info", tags=["products"])
+@inject
+async def get_or_create_products_task(
+        token: str = Depends(get_wb_token),
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
+):
+    """
+    Создает асинхронную задачу для получения детальной информации о товарах. Результат сохраняется в файл.
+
+    :arg
+        token: токен wb в заголовке
+
+    :return
+        id операции по которой можем пинговать статус
+    """
+    return await wb_client.create_or_get_task_for_all_products(token=token)
+
+
+@router.post("/product/task/status", tags=["products"])
+@inject
+async def get_task(
+        task_info: GetTaskRequest,
+        token: str = Depends(get_wb_token),
+        task_manager: TaskManager = Depends(Provide[Container.task_manager])
+):
+    tasks = await task_manager.get_tasks_by_token(wb_token=token, task_info=task_info)
+    if tasks:
+        return [task.to_front() for task in tasks]
+    return []
 #
 # @router.post("/products", tags=["Products"])
 # async def create_products(

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import wildberries
+from app.api.default import router as default_router
 from app.api.wildberries import router as wb_router
 from app.containers import Container
 from app.utils.logging import get_logger
@@ -21,9 +22,11 @@ def init_dependency_injector() -> Container:
     """
     container = Container()
     container.config.from_pydantic(settings=settings, required=True)
+
     container.wire(
         modules=[wildberries]
     )
+
     return container
 
 
@@ -54,9 +57,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Wildberries API Proxy",
-    description="Production-ready прокси к Wildberries API с rate limiting",
-    version="1.0.0",
+    title=settings.APP_NAME,
+    description=settings.DESCRIPTION,
     lifespan=lifespan
 )
 
@@ -69,6 +71,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(default_router)
 app.include_router(wb_router)
 
 

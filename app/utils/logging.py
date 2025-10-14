@@ -20,20 +20,21 @@ def get_logger(name: str = None, level=settings.LOG_LEVEL):
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
-    # Handler для файла
-    fh = logging.FileHandler(f"{log_dir}/{datetime.date.today()}.log")
-    fh.setLevel(level)
+    if not logger.hasHandlers():
+        # Handler для файла
+        fh = logging.FileHandler(f"{log_dir}/{datetime.date.today()}.log", encoding="utf-8")
+        fh.setLevel(level)
 
-    # Handler для консоли
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
+        # Handler для консоли
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
 
-    # Формат логов
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
+        # Формат логов
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        ch.setFormatter(formatter)
 
-    # Добавляем хендлеры
-    logger.addHandler(fh)
-    logger.addHandler(ch)
+        # Добавляем хендлеры
+        logger.addHandler(fh)
+        logger.addHandler(ch)
     return logger

@@ -1,6 +1,7 @@
 import os
 
 from pydantic_settings import BaseSettings
+from typing import ClassVar
 
 current_path = os.path.abspath(__file__)
 project_root = os.path.dirname(current_path)
@@ -12,24 +13,26 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # Настройка FastApi
-    APP_NAME: str = "API для вопросов и ответов"
+    APP_NAME: str = "Carville WB API Service"
+    DESCRIPTION: str = "Сервис для работы с WB API и карточками товаров"
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
     # Redis настройки
     REDIS_URL: str = "redis://localhost:6379/0"
+    # Mongo настройки
+    MONGO_URL: str = "mongodb://localhost:27017"
+    MONGO_DB_NAME: str = "general"
+    MONGO_COLLECTION_NAME: str = "tasks"
 
     # WB API настройки
-    WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30
     MAX_RETRIES: int = 3
-
-    # Rate limiting настройки
-    DEFAULT_RATE_LIMIT: int = 100
-    DEFAULT_WINDOW: int = 60
 
     class Config:
         env_file = f"{project_root}/.env"
