@@ -21,14 +21,26 @@ class Settings(BaseSettings):
 
     # Redis настройки
     REDIS_URL: str = "redis://localhost:6379/0"
+
     # Mongo настройки
     MONGO_URL: str = "mongodb://localhost:27017"
     MONGO_DB_NAME: str = "general"
     MONGO_COLLECTION_NAME: str = "tasks"
 
+    # MS SQL SERVER настройки
+    DB_SERVER: str = ""
+    DB_PORT: int = 0
+    DB_NAME: str = ""
+    DB_USER: str = ""
+    DB_PASSWORD: str = ""
+    DB_DRIVER: str = 'ODBC Driver 17 for SQL Server'
+
     # WB API настройки
     # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
     WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+
+    # Дефолтный токен для получения например дерева категорий
+    DEFAULT_WB_TOKEN: str = ""
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

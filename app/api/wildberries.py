@@ -1,10 +1,12 @@
+import asyncio
+
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header
 
 from app.containers import Container
 from app.core.task_manager import TaskManager
 from app.core.wb_client import WildberriesClient
-from app.schemas.task import GetTaskRequest
+from app.schemas.task import GetTaskRequest, TaskType
 from app.utils.jwt import is_valid_token
 
 router = APIRouter(prefix="/api", )
@@ -55,7 +57,8 @@ async def get_product(
 @inject
 async def get_or_create_products_task(
         token: str = Depends(get_wb_token),
-        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client]),
+        task_manager: TaskManager = Depends(Provide[Container.task_manager])
 ):
     """
     Создает асинхронную задачу для получения детальной информации о товарах. Результат сохраняется в файл.
@@ -66,7 +69,11 @@ async def get_or_create_products_task(
     :return
         id операции по которой можем пинговать статус
     """
-    return await wb_client.create_or_get_task_for_all_products(token=token)
+    task = await task_manager.get_id_task_by_token(wb_token=token)
+    if not task:
+        task = await task_manager.create_task(wb_token=token, task_type=TaskType.GET_PRODUCTS)
+        asyncio.create_task(wb_client.collect_products_background(token=token, task_info=task))
+    return task.to_front()
 
 
 @router.post("/product/task/status", tags=["products"])
@@ -80,7 +87,8 @@ async def get_task(
     if tasks:
         return [task.to_front() for task in tasks]
     return []
-#
+
+
 # @router.post("/products", tags=["Products"])
 # async def create_products(
 #         products: List[ProductCreateItem],
