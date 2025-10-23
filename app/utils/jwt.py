@@ -1,10 +1,16 @@
 import jwt
 
+from config import settings
+
 
 def is_valid_token(token: str):
     """
     Проверка токена на валидность
     """
+
+    # Для работы с
+    if settings.DEBUG:
+        return True
 
     try:
         # Декодируем без проверки подписи, чтобы прочитать payload
