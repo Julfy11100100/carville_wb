@@ -6,11 +6,13 @@ import aiohttp
 from aiohttp import ClientTimeout, TCPConnector
 from aiohttp_retry import RetryClient, ExponentialRetry
 
-from app.core.product_file_service import ProductFileService
-from app.core.task_manager import TaskManager
+from app.services.product_file_service import ProductFileService
+from app.services.task_manager import TaskManager
 from app.exceptions.wb_api import WildberriesRateLimitError, WildberriesAPIError
 from app.schemas.task import TaskStatus, TaskInfo
 from app.utils.logging import get_logger
+from app.services.elasticsearch_service import ElasticsearchService
+from app.utils.token import hash_token
 from config import settings
 
 logger = get_logger()
@@ -19,13 +21,6 @@ logger = get_logger()
 class WildberriesClient:
     """
     Асинхронный HTTP-клиент для работы с Wildberries API.
-
-    Использует connection pooling и автоматический retry для надёжности.
-    Должен использоваться как async context manager для правильного управления ресурсами.
-
-    Example:
-        async with WildberriesClient() as client:
-            product = await client.get_product(token)
     """
 
     def __init__(
@@ -91,7 +86,7 @@ class WildberriesClient:
                 raise_for_status=False
             )
             logger.info(
-                "WB API session created",
+                "Сессия WB API создана",
                 extra={
                     "base_url": self.base_url,
                     "max_retries": self.max_retries,
@@ -107,7 +102,7 @@ class WildberriesClient:
             await self._session.close()
         if self.connector:
             await self.connector.close()
-        logger.info("WB API session closed")
+        logger.info("Сессия WB API закрыта")
 
     def _get_headers(self, token: str) -> Dict[str, str]:
         """Создаёт заголовки для WB API"""
@@ -117,7 +112,7 @@ class WildberriesClient:
             "Accept": "application/json"
         }
 
-    async def _make_request(
+    async def make_request(
             self,
             method: str,
             endpoint: str,
@@ -149,7 +144,7 @@ class WildberriesClient:
             headers.update(kwargs.pop('headers'))
 
         logger.debug(
-            "Making WB API request",
+            "Выполнение запроса к WB API",
             extra={
                 "method": method,
                 "endpoint": endpoint,
@@ -164,7 +159,7 @@ class WildberriesClient:
 
                 # Обработка различных статус-кодов
                 if response.status == 429:
-                    error_msg = "Rate limit exceeded"
+                    error_msg = "Превышен лимит запросов"
                     logger.warning(
                         error_msg,
                         extra={
@@ -178,13 +173,13 @@ class WildberriesClient:
                     )
 
                 if response.status >= 400:
-                    error_detail = f"WB API error: {response.status}"
+                    error_detail = f"Ошибка WB API: {response.status}"
                     try:
                         error_data = await response.json()
                         error_detail = error_data.get('errorText', error_detail)
 
                         logger.error(
-                            "WB API error response",
+                            "Ошибочный ответ от WB API",
                             extra={
                                 "status_code": response.status,
                                 "error_detail": error_detail,
@@ -205,7 +200,7 @@ class WildberriesClient:
                 result = await response.json() if response.content_length else {}
 
                 logger.debug(
-                    "WB API request successful",
+                    "Запрос к WB API выполнен успешно",
                     extra={
                         "status_code": response.status,
                         "endpoint": endpoint
@@ -216,7 +211,7 @@ class WildberriesClient:
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.error(
-                "Network error during WB API request",
+                "Ошибка сети при запросе к WB API",
                 extra={
                     "error": str(e),
                     "error_type": type(e).__name__,
@@ -225,14 +220,14 @@ class WildberriesClient:
                 exc_info=True
             )
             raise WildberriesAPIError(
-                f"Network error: {str(e)}",
+                f"Ошибка сети: {str(e)}",
                 response_data={"original_error": str(e)}
             )
         except WildberriesAPIError:
             raise
         except Exception as e:
             logger.error(
-                "Unexpected error during WB API request",
+                "Неожиданная ошибка при запросе к WB API",
                 extra={
                     "error": str(e),
                     "error_type": type(e).__name__,
@@ -241,7 +236,7 @@ class WildberriesClient:
                 exc_info=True
             )
             raise WildberriesAPIError(
-                f"Unexpected error: {str(e)}",
+                f"Неожиданная ошибка: {str(e)}",
                 response_data={"original_error": str(e)}
             )
 
@@ -257,7 +252,7 @@ class WildberriesClient:
                 }
             }
         }
-        return await self._make_request(
+        return await self.make_request(
             "POST",
             "/content/v2/get/cards/list",
             token,
@@ -292,7 +287,7 @@ class WildberriesClient:
                 }
             }
         }
-        return await self._make_request(
+        return await self.make_request(
             "POST",
             "/content/v2/get/cards/list",
             token,
@@ -319,16 +314,16 @@ class WildberriesClient:
         """
         if len(products) > 3000:
             raise ValueError(
-                f"Cannot update more than 3000 products at once. "
-                f"Got {len(products)}. Use update_products_chunked() instead."
+                f"Невозможно обновить больше 3000 товаров одновременно. "
+                f"Передано: {len(products)}. Используйте update_products_chunked()."
             )
 
         logger.info(
-            "Updating products",
+            "Обновление товаров",
             extra={"count": len(products)}
         )
 
-        return await self._make_request(
+        return await self.make_request(
             "POST",
             "/content/v2/cards/update",
             token,
@@ -359,7 +354,7 @@ class WildberriesClient:
         total_chunks = (len(products) - 1) // chunk_size + 1
 
         logger.info(
-            "Starting chunked products update",
+            "Начало обновления товаров с разбиением на чанки",
             extra={
                 "total_products": len(products),
                 "chunk_size": chunk_size,
@@ -372,7 +367,7 @@ class WildberriesClient:
             chunk_number = i // chunk_size + 1
 
             logger.info(
-                "Updating products chunk",
+                "Обновление чанка товаров",
                 extra={
                     "chunk": f"{chunk_number}/{total_chunks}",
                     "chunk_size": len(chunk)
@@ -389,7 +384,7 @@ class WildberriesClient:
 
             except WildberriesAPIError as e:
                 logger.error(
-                    "Failed to update products chunk",
+                    "Ошибка при обновлении чанка товаров",
                     extra={
                         "chunk": f"{chunk_number}/{total_chunks}",
                         "error": str(e)
@@ -398,71 +393,11 @@ class WildberriesClient:
                 raise
 
         logger.info(
-            "Chunked products update completed",
+            "Обновление товаров с разбиением на чанки завершено",
             extra={"total_chunks_processed": len(results)}
         )
 
         return results
-
-    async def get_cards_errors(
-            self,
-            token: str,
-            limit: int = 100,
-            updated_at: Optional[str] = None,
-            batch_uuid: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Получение списка карточек с ошибками после обновления
-        """
-        body = {
-            "cursor": {
-                "limit": min(limit, 1000)
-            },
-            "order": {
-                "ascending": True
-            }
-        }
-
-        if updated_at and batch_uuid:
-            body["cursor"]["updatedAt"] = updated_at
-            body["cursor"]["batchUUID"] = batch_uuid
-
-        return await self._make_request(
-            "POST",
-            "/content/v2/cards/error/list",
-            token,
-            json=body
-        )
-
-    async def get_product_full_data(
-            self,
-            token: str,
-            nm_id: int
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Получение полных данных карточки по nmID
-        """
-        body = {
-            "settings": {
-                "cursor": {
-                    "limit": 1
-                },
-                "filter": {
-                    "withPhoto": -1,
-                    "textSearch": str(nm_id)
-                }
-            }
-        }
-
-        response = await self._make_request(
-            "POST",
-            "/content/v2/get/cards/list",
-            token,
-            json=body
-        )
-
-        cards = response.get("cards", [])
-        return cards[0] if cards else None
 
     async def collect_products_background(self, token: str, task_info: TaskInfo):
         """
@@ -477,7 +412,7 @@ class WildberriesClient:
             cursor = {}
 
             logger.info(
-                "Starting products collection",
+                "Начало сбора товаров",
                 extra={"task_id": task_info.task_id}
             )
 
@@ -507,7 +442,7 @@ class WildberriesClient:
                     await self.task_manager.save_task(task_info)
 
                     logger.debug(
-                        "Products collection progress",
+                        "Прогресс сбора товаров",
                         extra={
                             "task_id": task_info.task_id,
                             "collected": len(all_products),
@@ -519,7 +454,7 @@ class WildberriesClient:
 
                 except WildberriesRateLimitError:
                     logger.warning(
-                        "Rate limit hit during collection, waiting",
+                        "Достигнут лимит запросов во время сбора, ожидание",
                         extra={"task_id": task_info.task_id}
                     )
                     await asyncio.sleep(60)
@@ -531,6 +466,10 @@ class WildberriesClient:
                 all_products
             )
 
+            # Индексируем
+            es_service = ElasticsearchService()
+            await es_service.index_products(token=hash_token(token)[:10], products=all_products)
+
             task_info.status = TaskStatus.COMPLETED
             task_info.completed_at = datetime.now()
             task_info.total_items = len(all_products)
@@ -538,7 +477,7 @@ class WildberriesClient:
             task_info.file_path = file_path
 
             logger.info(
-                "Products collection completed",
+                "Сбор товаров завершён",
                 extra={
                     "task_id": task_info.task_id,
                     "total_products": len(all_products),
@@ -553,7 +492,7 @@ class WildberriesClient:
             task_info.error = str(e)
 
             logger.error(
-                "Products collection failed",
+                "Ошибка при сборе товаров",
                 extra={
                     "task_id": task_info.task_id,
                     "error": str(e),
@@ -565,6 +504,104 @@ class WildberriesClient:
         finally:
             await self.task_manager.save_task(task_info)
 
+    async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> List[Dict[str, Any]]:
+        """
+        Получает все пакеты ошибок для полноценного мониторинга.
+        """
+        all_error_batches = []
+        cursor = {"limit": 100}
+        iteration = 0
+        logger.info("Начало сбора всех ошибок обновления")
+        while iteration < max_batches:
+            body = {
+                "cursor": cursor,
+                "order": {"ascending": True}
+            }
+            response = await self.make_request(
+                "POST",
+                "/content/v2/cards/error/list",
+                token,
+                json=body
+            )
+            data = response.get("data", {})
+            items = data.get("items", [])
+            if not items:
+                break
+            all_error_batches.extend(items)
+            response_cursor = data.get("cursor", {})
+            if not response_cursor.get("next", False):
+                break
+            cursor = {
+                "limit": 100,
+                "updatedAt": response_cursor.get("updatedAt"),
+                "batchUUID": response_cursor.get("batchUUID")
+            }
+            iteration += 1
+            await asyncio.sleep(6)  # rate limit
+        logger.info("Сбор ошибок завершен", extra={"total_batches": len(all_error_batches)})
+        return all_error_batches
+
+    @staticmethod
+    def _filter_relevant_errors(
+            all_errors: List[Dict[str, Any]],
+            vendor_codes: Set[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Фильтрует пакеты ошибок по vendorCode, относящиеся к текущему обновлению.
+        """
+        relevant = []
+        for batch in all_errors:
+            batch_vendor_codes = set(batch.get("vendorCodes", []))
+            if batch_vendor_codes & vendor_codes:
+                relevant.append(batch)
+        return relevant
+
+    def _calculate_error_statistics(
+            self,
+            all_errors: List[Dict[str, Any]],
+            vendor_codes: Set[str],
+            total_products: int
+    ) -> Dict[str, Any]:
+        """
+        Правильно подсчитывает статистику ошибок.
+
+        ВАЖНО: Считает количество КАРТОЧЕК с ошибками, а не количество самих ошибок.
+        Одна карточка может иметь несколько ошибок валидации.
+
+        Args:
+            all_errors: Все пакеты ошибок от API
+            vendor_codes: Множество vendorCode обновляемых товаров
+            total_products: Всего товаров для обновления
+
+        Returns:
+            Словарь со статистикой
+        """
+        # Фильтруем релевантные ошибки
+        relevant_errors = self._filter_relevant_errors(all_errors, vendor_codes)
+
+        # Собираем УНИКАЛЬНЫЕ vendorCode с ошибками (не считаем количество ошибок!)
+        error_vendor_codes = set()
+        error_details = {}
+
+        for batch in relevant_errors:
+            batch_errors = batch.get("errors", {})
+            error_details.update(batch_errors)
+            error_vendor_codes.update(batch_errors.keys())
+
+        # Подсчитываем КАРТОЧКИ, а не ошибки
+        error_count = len(error_vendor_codes)
+        success_count = total_products - error_count
+        success_rate = success_count / total_products if total_products > 0 else 0
+
+        return {
+            "success_count": success_count,
+            "error_count": error_count,
+            "success_rate": success_rate,
+            "error_vendor_codes": error_vendor_codes,
+            "error_details": error_details,
+            "error_batches": relevant_errors
+        }
+
     async def update_products_background(
             self,
             token: str,
@@ -572,59 +609,47 @@ class WildberriesClient:
             task_info: TaskInfo
     ):
         """
-        Фоновая задача для обновления карточек товаров
+        Фоновая задача для обновления карточек товаров.
         """
         try:
             task_info.status = TaskStatus.RUNNING
             task_info.total_items = len(products)
+
+            # Сохраняем vendorCodes для последующей проверки
+            vendor_codes = {p.get("vendorCode") for p in products if p.get("vendorCode")}
+            nm_ids = [p.get("nmID") for p in products if p.get("nmID")]
+
+            task_info.metadata = {
+                "vendor_codes": list(vendor_codes),
+                "nm_ids": nm_ids,
+                "update_started_at": datetime.now().isoformat(),
+                "update_completed_at": None
+            }
             await self.task_manager.save_task(task_info)
 
             logger.info(
-                "Starting products update",
+                "Начало обновления товаров",
                 extra={
                     "task_id": task_info.task_id,
-                    "total_products": len(products)
+                    "total_products": len(products),
+                    "unique_vendor_codes": len(vendor_codes)
                 }
             )
 
             # Обновляем с автоматическим разбиением на чанки
             await self.update_products_chunked(token, products, delay_between_chunks=6)
 
-            # Обновляем прогресс
-            task_info.processed_items = len(products)
-            await self.task_manager.save_task(task_info)
-
-            # Ждём обработки на стороне WB
-            await asyncio.sleep(10)
-
-            # Проверяем ошибки
-            errors_response = await self.get_cards_errors(token, limit=100)
-            errors_list = errors_response.get("data", {}).get("items", [])
-
-            if errors_list:
-                logger.warning(
-                    "Products update completed with errors",
-                    extra={
-                        "task_id": task_info.task_id,
-                        "error_batches": len(errors_list)
-                    }
-                )
-
-            # Завершаем задачу
+            # Задача завершена - данные отправлены в WB
             task_info.status = TaskStatus.COMPLETED
             task_info.completed_at = datetime.now()
             task_info.processed_items = len(products)
-
-            if errors_list:
-                task_info.error = f"Updated with errors. Found {len(errors_list)} error batches"
-                task_info.metadata = {"errors": errors_list}
+            task_info.metadata["update_completed_at"] = datetime.now().isoformat()
 
             logger.info(
-                "Products update completed",
+                "Обновление товаров отправлено в WB API",
                 extra={
                     "task_id": task_info.task_id,
-                    "updated_products": len(products),
-                    "error_batches": len(errors_list)
+                    "total_products": len(products)
                 }
             )
 
@@ -634,7 +659,7 @@ class WildberriesClient:
             task_info.error = str(e)
 
             logger.error(
-                "Products update failed",
+                "Ошибка при обновлении товаров",
                 extra={
                     "task_id": task_info.task_id,
                     "error": str(e),
@@ -645,3 +670,82 @@ class WildberriesClient:
 
         finally:
             await self.task_manager.save_task(task_info)
+
+    async def check_update_results(
+            self,
+            token: str,
+            task_info: TaskInfo
+    ) -> Dict[str, Any]:
+        """
+        Проверяет результаты обновления товаров через cards/error/list.
+
+        Args:
+            token: API токен
+            task_info: Информация о задаче обновления
+
+        Returns:
+            Словарь с детальной статистикой обновления
+        """
+        try:
+            metadata = task_info.metadata or {}
+            vendor_codes = set(metadata.get("vendor_codes", []))
+            total_products = task_info.total_items or 0
+
+            if not vendor_codes:
+                return {
+                    "checked": False,
+                    "reason": "No vendor codes found in task metadata"
+                }
+
+            logger.info(
+                "Проверка результатов обновления",
+                extra={
+                    "task_id": task_info.task_id,
+                    "vendor_codes_count": len(vendor_codes)
+                }
+            )
+
+            # Получаем все ошибки
+            all_errors = await self.get_all_errors_for_update(token)
+
+            # Вычисляем статистику
+            stats = self._calculate_error_statistics(
+                all_errors,
+                vendor_codes,
+                total_products
+            )
+
+            logger.info(
+                "Результаты проверки обновления",
+                extra={
+                    "task_id": task_info.task_id,
+                    "success_count": stats["success_count"],
+                    "error_count": stats["error_count"],
+                    "success_rate": f"{stats['success_rate'] * 100:.1f}%"
+                }
+            )
+
+            return {
+                "checked": True,
+                "success_count": stats["success_count"],
+                "error_count": stats["error_count"],
+                "success_rate": stats["success_rate"],
+                "error_vendor_codes": list(stats["error_vendor_codes"]),
+                "error_details": stats["error_details"],
+                "error_batches": stats["error_batches"]
+            }
+
+        except Exception as e:
+            logger.error(
+                "Ошибка при проверке результатов обновления",
+                extra={
+                    "task_id": task_info.task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                },
+                exc_info=True
+            )
+            return {
+                "checked": False,
+                "reason": f"Error checking results: {str(e)}"
+            }

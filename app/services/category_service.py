@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 
-from app.core.wb_client import WildberriesClient
+from app.services.wb_client import WildberriesClient
 from app.utils.logging import get_logger
 from config import settings
 
@@ -17,12 +17,9 @@ class CategoryService:
     def __init__(self, wb_client: WildberriesClient = None):
         self.wb_client = wb_client if wb_client else WildberriesClient()
 
-    async def close(self):
-        await self.wb_client.close()
-
     async def get_parent_categories(self, token: str) -> List[Dict[str, Any]]:
         """Получает родительские категории"""
-        response = await self.wb_client._make_request(
+        response = await self.wb_client.make_request(
             "GET",
             "/content/v2/object/parent/all",
             token
@@ -36,7 +33,7 @@ class CategoryService:
             parent_id: str
     ) -> List[Dict[str, Any]]:
         """Получает дочерние категории по parent_id"""
-        response = await self.wb_client._make_request(
+        response = await self.wb_client.make_request(
             "GET",
             "/content/v2/object/all",
             token,

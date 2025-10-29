@@ -1,8 +1,8 @@
 from dependency_injector import containers, providers
 
-from app.core.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
-from app.core.task_manager import TaskManager
-from app.core.wb_client import WildberriesClient
+from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
+from app.services.task_manager import TaskManager
+from app.services.wb_client import WildberriesClient
 
 
 class Container(containers.DeclarativeContainer):

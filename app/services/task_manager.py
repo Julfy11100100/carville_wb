@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import PyMongoError, DuplicateKeyError
 
-from app.core.mongo_repository import MongoService
+from app.services.mongo_repository import MongoService
 from app.exceptions.task import TaskDatabaseError, TaskAlreadyExistsError
 from app.schemas.task import TaskInfo, TaskStatus, TaskType, GetTaskRequest
 from app.utils.logging import get_logger

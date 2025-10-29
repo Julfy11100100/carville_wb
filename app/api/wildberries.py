@@ -4,10 +4,11 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
 
 from app.containers import Container
-from app.core.task_manager import TaskManager
-from app.core.wb_client import WildberriesClient, WildberriesAPIError
 from app.exceptions.task import TaskAlreadyExistsError, TaskDatabaseError
-from app.schemas.task import GetTaskRequest, TaskType, TaskInfo
+from app.schemas.task import GetTaskRequest, TaskType
+from app.services.task_manager import TaskManager
+from app.services.wb_client import WildberriesClient, WildberriesAPIError
+from app.utils.background_operations import run_update_products_background, run_collect_products_background
 from app.utils.jwt import is_valid_token
 from app.utils.logging import get_logger, set_task_id
 
@@ -15,13 +16,9 @@ logger = get_logger("api")
 router = APIRouter(prefix="/api")
 
 
-# ============================================================================
-# Dependencies
-# ============================================================================
-
 def get_wb_token(x_wb_token: str = Header(..., description="WB API токен")) -> str:
     """
-    Dependency для получения WB API токена из заголовка
+    Зависимость для получения WB API токена из заголовка запроса
 
     Args:
         x_wb_token: WB API токен из заголовка
@@ -33,10 +30,10 @@ def get_wb_token(x_wb_token: str = Header(..., description="WB API токен"))
         HTTPException: Если токен отсутствует
     """
     if not x_wb_token:
-        logger.warning("Missing WB API token in request")
+        logger.warning("Токен WB API отсутствует в запросе")
         raise HTTPException(
             status_code=401,
-            detail="WB API token required in X-WB-Token header"
+            detail="Требуется токен WB API в заголовке X-WB-Token"
         )
     return x_wb_token
 
@@ -46,80 +43,13 @@ async def get_wb_client(
         task_manager: TaskManager = Depends(Provide[Container.task_manager])
 ) -> AsyncGenerator[WildberriesClient, None]:
     """
-    Dependency для получения WildberriesClient с автоматическим закрытием
+    Зависимость для получения WildberriesClient с автоматическим закрытием соединения
 
-    Использует yield для гарантированного закрытия после обработки запроса
+    Использует yield для гарантированного закрытия ресурсов после обработки запроса
     """
     async with WildberriesClient(task_manager=task_manager) as client:
         yield client
 
-
-# ============================================================================
-# Background Task Wrappers
-# ============================================================================
-
-async def run_collect_products_background(
-        token: str,
-        task_info: TaskInfo,
-        task_manager: TaskManager
-):
-    """
-    Обёртка для фоновой задачи сбора товаров с правильным управлением ресурсами
-
-    Args:
-        token: WB API токен
-        task_info: Информация о задаче
-        task_manager: Менеджер задач
-    """
-    # Создаём отдельный клиент для фоновой задачи
-    async with WildberriesClient(task_manager=task_manager) as wb_client:
-        try:
-            await wb_client.collect_products_background(token, task_info)
-        except Exception as e:
-            logger.error(
-                "Background task failed",
-                extra={
-                    "task_id": task_info.task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
-
-
-async def run_update_products_background(
-        token: str,
-        products: List[dict],
-        task_info: TaskInfo,
-        task_manager: TaskManager
-):
-    """
-    Обёртка для фоновой задачи обновления товаров с правильным управлением ресурсами
-
-    Args:
-        token: WB API токен
-        products: Список товаров для обновления
-        task_info: Информация о задаче
-        task_manager: Менеджер задач
-    """
-    async with WildberriesClient(task_manager=task_manager) as wb_client:
-        try:
-            await wb_client.update_products_background(token, products, task_info)
-        except Exception as e:
-            logger.error(
-                "Background update task failed",
-                extra={
-                    "task_id": task_info.task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
-
-
-# ============================================================================
-# Routes
-# ============================================================================
 
 @router.get("/auth/check_token", tags=["authentication"])
 async def check_token(token: str = Depends(get_wb_token)):
@@ -130,7 +60,7 @@ async def check_token(token: str = Depends(get_wb_token)):
         token: WB API токен из заголовка
 
     Returns:
-        Валидность токена
+        Данные о валидности токена
 
     Raises:
         HTTPException: Если токен невалиден
@@ -139,14 +69,14 @@ async def check_token(token: str = Depends(get_wb_token)):
         token_data = is_valid_token(token)
 
         if not token_data:
-            logger.warning("Invalid WB token provided")
+            logger.warning("Предоставлен невалидный WB токен")
             raise HTTPException(
                 status_code=401,
-                detail="Invalid WB API token"
+                detail="Невалидный токен WB API"
             )
 
         logger.info(
-            "Token validation successful",
+            "Проверка токена успешна",
             extra={"token_valid": True}
         )
 
@@ -154,13 +84,13 @@ async def check_token(token: str = Depends(get_wb_token)):
 
     except Exception as e:
         logger.error(
-            "Token validation failed",
+            "Ошибка при проверке токена",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=401,
-            detail="Token validation failed"
+            detail="Ошибка при проверке токена"
         )
 
 
@@ -183,12 +113,12 @@ async def get_product(
         HTTPException: При ошибках WB API
     """
     try:
-        logger.info("Fetching sample product")
+        logger.info("Запрос примера товара")
 
         result = await wb_client.get_product(token=token)
 
         logger.info(
-            "Sample product fetched successfully",
+            "Пример товара успешно получен",
             extra={
                 "cards_count": len(result.get("cards", []))
             }
@@ -198,7 +128,7 @@ async def get_product(
 
     except WildberriesAPIError as e:
         logger.error(
-            "Failed to fetch sample product",
+            "Ошибка при получении примера товара",
             extra={
                 "error": str(e),
                 "status_code": e.status_code
@@ -207,17 +137,17 @@ async def get_product(
         )
         raise HTTPException(
             status_code=e.status_code or 500,
-            detail=f"WB API error: {e.message}"
+            detail=f"Ошибка WB API: {e.message}"
         )
     except Exception as e:
         logger.error(
-            "Unexpected error while fetching sample product",
+            "Неожиданная ошибка при получении примера товара",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="Внутренняя ошибка сервера"
         )
 
 
@@ -233,7 +163,7 @@ async def create_products_collection_task(
     Результат сохраняется в файл.
 
     Args:
-        background_tasks: FastAPI background tasks
+        background_tasks: Фоновые задачи FastAPI
         token: WB API токен из заголовка
         task_manager: Менеджер задач
 
@@ -244,14 +174,14 @@ async def create_products_collection_task(
         HTTPException: При ошибках создания задачи
     """
     try:
-        logger.info("Checking for active collection task")
+        logger.info("Проверка наличия активной задачи сбора")
 
         # Проверяем, есть ли уже активная задача для этого токена
         active_task = await task_manager.get_active_task_by_token(token)
 
         if active_task:
             logger.info(
-                "Active task already exists",
+                "Активная задача уже существует",
                 extra={
                     "task_id": active_task.task_id,
                     "status": active_task.status.value,
@@ -261,7 +191,7 @@ async def create_products_collection_task(
             return {
                 "task_id": active_task.task_id,
                 "status": active_task.status.value,
-                "message": "Task already in progress",
+                "message": "Задача уже выполняется",
                 "created_at": active_task.created_at.isoformat(),
                 "progress": {
                     "total": active_task.total_items,
@@ -270,7 +200,7 @@ async def create_products_collection_task(
             }
 
         # Создаём новую задачу
-        logger.info("Creating new collection task")
+        logger.info("Создание новой задачи сбора товаров")
 
         task = await task_manager.create_task(
             wb_token=token,
@@ -289,7 +219,7 @@ async def create_products_collection_task(
         )
 
         logger.info(
-            "Collection task created and started",
+            "Задача сбора товаров успешно создана и запущена",
             extra={
                 "task_id": task.task_id,
                 "task_type": task.task_type.value
@@ -299,13 +229,13 @@ async def create_products_collection_task(
         return {
             "task_id": task.task_id,
             "status": task.status.value,
-            "message": "Task created successfully",
+            "message": "Задача успешно создана",
             "created_at": task.created_at.isoformat()
         }
 
     except TaskAlreadyExistsError as e:
         logger.warning(
-            "Task already exists",
+            "Задача уже существует",
             extra={"error": str(e)}
         )
         raise HTTPException(
@@ -314,23 +244,23 @@ async def create_products_collection_task(
         )
     except TaskDatabaseError as e:
         logger.error(
-            "Database error while creating task",
+            "Ошибка базы данных при создании задачи",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=503,
-            detail="Database service unavailable"
+            detail="Сервис базы данных недоступен"
         )
     except Exception as e:
         logger.error(
-            "Unexpected error while creating task",
+            "Неожиданная ошибка при создании задачи",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="Внутренняя ошибка сервера"
         )
 
 
@@ -347,7 +277,7 @@ async def create_products_update_task(
 
     Args:
         products: Список товаров для обновления
-        background_tasks: FastAPI background tasks
+        background_tasks: Фоновые задачи FastAPI
         token: WB API токен из заголовка
         task_manager: Менеджер задач
 
@@ -361,11 +291,11 @@ async def create_products_update_task(
         if not products:
             raise HTTPException(
                 status_code=400,
-                detail="Products list cannot be empty"
+                detail="Список товаров не может быть пустым"
             )
 
         logger.info(
-            "Creating products update task",
+            "Создание задачи обновления товаров",
             extra={"products_count": len(products)}
         )
 
@@ -387,7 +317,7 @@ async def create_products_update_task(
         )
 
         logger.info(
-            "Update task created and started",
+            "Задача обновления товаров успешно создана и запущена",
             extra={
                 "task_id": task.task_id,
                 "products_count": len(products)
@@ -397,30 +327,30 @@ async def create_products_update_task(
         return {
             "task_id": task.task_id,
             "status": task.status.value,
-            "message": "Update task created successfully",
+            "message": "Задача обновления успешно создана",
             "created_at": task.created_at.isoformat(),
             "total_items": len(products)
         }
 
     except TaskDatabaseError as e:
         logger.error(
-            "Database error while creating update task",
+            "Ошибка базы данных при создании задачи обновления",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=503,
-            detail="Database service unavailable"
+            detail="Сервис базы данных недоступен"
         )
     except Exception as e:
         logger.error(
-            "Unexpected error while creating update task",
+            "Неожиданная ошибка при создании задачи обновления",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="Внутренняя ошибка сервера"
         )
 
 
@@ -447,7 +377,7 @@ async def get_task_status(
     """
     try:
         logger.debug(
-            "Fetching task status",
+            "Получение статуса задачи",
             extra={"task_id": task_id}
         )
 
@@ -455,16 +385,16 @@ async def get_task_status(
 
         if not task:
             logger.warning(
-                "Task not found",
+                "Задача не найдена",
                 extra={"task_id": task_id}
             )
             raise HTTPException(
                 status_code=404,
-                detail=f"Task with ID {task_id} not found"
+                detail=f"Задача с ID {task_id} не найдена"
             )
 
         logger.debug(
-            "Task status retrieved",
+            "Статус задачи получен",
             extra={
                 "task_id": task_id,
                 "status": task.status.value
@@ -493,7 +423,7 @@ async def get_task_status(
 
     except TaskDatabaseError as e:
         logger.error(
-            "Database error while fetching task status",
+            "Ошибка базы данных при получении статуса задачи",
             extra={
                 "task_id": task_id,
                 "error": str(e)
@@ -502,13 +432,13 @@ async def get_task_status(
         )
         raise HTTPException(
             status_code=503,
-            detail="Database service unavailable"
+            detail="Сервис базы данных недоступен"
         )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            "Unexpected error while fetching task status",
+            "Неожиданная ошибка при получении статуса задачи",
             extra={
                 "task_id": task_id,
                 "error": str(e)
@@ -517,7 +447,7 @@ async def get_task_status(
         )
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="Внутренняя ошибка сервера"
         )
 
 
@@ -544,7 +474,7 @@ async def search_tasks(
     """
     try:
         logger.info(
-            "Searching tasks",
+            "Поиск задач",
             extra={
                 "filters": {
                     "task_id": filters.task_id,
@@ -560,7 +490,7 @@ async def search_tasks(
         )
 
         logger.info(
-            "Tasks search completed",
+            "Поиск задач завершён",
             extra={"found_count": len(tasks)}
         )
 
@@ -585,77 +515,21 @@ async def search_tasks(
 
     except TaskDatabaseError as e:
         logger.error(
-            "Database error while searching tasks",
+            "Ошибка базы данных при поиске задач",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=503,
-            detail="Database service unavailable"
+            detail="Сервис базы данных недоступен"
         )
     except Exception as e:
         logger.error(
-            "Unexpected error while searching tasks",
+            "Неожиданная ошибка при поиске задач",
             extra={"error": str(e)},
             exc_info=True
         )
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="Внутренняя ошибка сервера"
         )
-
-
-# @router.get("/tasks/statistics", tags=["tasks"])
-# @inject
-# async def get_tasks_statistics(
-#         token: str = Depends(get_wb_token),
-#         task_manager: TaskManager = Depends(Provide[Container.task_manager])
-# ):
-#     """
-#     Получает статистику по задачам для текущего токена
-#
-#     Args:
-#         token: WB API токен из заголовка
-#         task_manager: Менеджер задач
-#
-#     Returns:
-#         Статистика по количеству задач в разных статусах
-#
-#     Raises:
-#         HTTPException: При ошибке БД
-#     """
-#     try:
-#         logger.info("Fetching tasks statistics")
-#
-#         statistics = await task_manager.get_task_statistics(wb_token=token)
-#
-#         logger.info(
-#             "Tasks statistics retrieved",
-#             extra={"statistics": statistics}
-#         )
-#
-#         return {
-#             "statistics": statistics,
-#             "total_tasks": sum(statistics.values())
-#         }
-#
-#     except TaskDatabaseError as e:
-#         logger.error(
-#             "Database error while fetching statistics",
-#             extra={"error": str(e)},
-#             exc_info=True
-#         )
-#         raise HTTPException(
-#             status_code=503,
-#             detail="Database service unavailable"
-#         )
-#     except Exception as e:
-#         logger.error(
-#             "Unexpected error while fetching statistics",
-#             extra={"error": str(e)},
-#             exc_info=True
-#         )
-#         raise HTTPException(
-#             status_code=500,
-#             detail="Internal server error"
-#         )
