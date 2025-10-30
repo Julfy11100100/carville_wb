@@ -84,25 +84,15 @@ class TaskManager:
             self._indexes_created = True
 
             logger.info(
-                "Task Manager indexes created successfully",
-                extra={
-                    "indexes": [
-                        "wb_token_status_created_idx",
-                        "task_id_unique_idx",
-                        "wb_token_type_created_idx",
-                        "created_at_idx"
-                    ]
-                }
+                "Индексы TaskManager созданы успешно: "
+                "wb_token_status_created_idx, task_id_unique_idx, "
+                "wb_token_type_created_idx, created_at_idx"
             )
 
         except PyMongoError as e:
-            logger.error(
-                "Failed to create Task Manager indexes",
-                extra={"error": str(e), "error_type": type(e).__name__},
-                exc_info=True
-            )
+            logger.error(f"Ошибка при создании индексов TaskManager: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to create database indexes",
+                "Ошибка при создании индексов базы данных",
                 details={"original_error": str(e)}
             )
 
@@ -136,33 +126,19 @@ class TaskManager:
             )
 
             if active_task:
-                logger.debug(
-                    "Active task found",
-                    extra={
-                        "task_id": active_task.get("task_id"),
-                        "task_type": active_task.get("task_type"),
-                        "status": active_task.get("status")
-                    }
-                )
+                task_id = active_task.get("task_id")
+                task_type = active_task.get("task_type")
+                status = active_task.get("status")
+                logger.debug(f"Найдена активная задача: {task_id}, тип={task_type}, статус={status}")
                 return TaskInfo(**active_task)
 
-            logger.debug(
-                "No active task found",
-                extra={"wb_token_hash": hash_wb_token[:8] + "..."}
-            )
+            logger.debug(f"Активных задач не найдено для токена {hash_wb_token[:8]}...")
             return None
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while fetching active task",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при получении активной задачи: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to fetch active task",
+                "Ошибка при получении активной задачи",
                 details={"original_error": str(e)}
             )
 
@@ -199,38 +175,23 @@ class TaskManager:
             await self.tasks.insert_one(task_info.model_dump())
 
             logger.info(
-                "Task created successfully",
-                extra={
-                    "task_id": task_info.task_id,
-                    "task_type": task_type.value,
-                    "status": task_info.status.value
-                }
+                f"Задача создана успешно: {task_info.task_id}, "
+                f"тип={task_type.value}, статус={task_info.status.value}"
             )
 
             return task_info
 
         except DuplicateKeyError:
-            logger.warning(
-                "Attempted to create task with duplicate ID",
-                extra={"task_id": task_info.task_id}
-            )
+            logger.warning(f"Попытка создания задачи с дублирующимся ID: {task_info.task_id}")
             raise TaskAlreadyExistsError(
-                f"Task with ID {task_info.task_id} already exists",
+                f"Задача с ID {task_info.task_id} уже существует",
                 details={"task_id": task_info.task_id}
             )
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while creating task",
-                extra={
-                    "task_id": task_info.task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при создании задачи {task_info.task_id}: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to create task",
+                "Ошибка при создании задачи",
                 details={
                     "task_id": task_info.task_id,
                     "original_error": str(e)
@@ -255,27 +216,14 @@ class TaskManager:
             )
 
             logger.debug(
-                "Task saved successfully",
-                extra={
-                    "task_id": task_info.task_id,
-                    "matched_count": result.matched_count,
-                    "modified_count": result.modified_count,
-                    "upserted": result.upserted_id is not None
-                }
+                f"Задача сохранена: {task_info.task_id}, "
+                f"совпадений={result.matched_count}, изменений={result.modified_count}"
             )
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while saving task",
-                extra={
-                    "task_id": task_info.task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при сохранении задачи {task_info.task_id}: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to save task",
+                "Ошибка при сохранении задачи",
                 details={
                     "task_id": task_info.task_id,
                     "original_error": str(e)
@@ -304,34 +252,18 @@ class TaskManager:
                 })
 
             if not doc:
-                logger.debug(
-                    "Task not found",
-                    extra={"task_id": task_id}
-                )
+                logger.debug(f"Задача не найдена: {task_id}")
                 return None
 
-            logger.debug(
-                "Task found",
-                extra={
-                    "task_id": task_id,
-                    "status": doc.get("status")
-                }
-            )
+            status = doc.get("status")
+            logger.debug(f"Задача найдена: {task_id}, статус={status}")
 
             return TaskInfo(**doc)
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while fetching task by ID",
-                extra={
-                    "task_id": task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при получении задачи {task_id}: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to fetch task by ID",
+                "Ошибка при получении задачи по ID",
                 details={
                     "task_id": task_id,
                     "original_error": str(e)
@@ -377,32 +309,19 @@ class TaskManager:
             async for doc in cursor:
                 tasks.append(TaskInfo(**doc))
 
+            task_type = filters.task_type.value if filters.task_type else None
+            status = filters.status.value if filters.status else None
             logger.info(
-                "Tasks fetched successfully",
-                extra={
-                    "count": len(tasks),
-                    "filters": {
-                        "task_id": filters.task_id,
-                        "task_type": filters.task_type.value if filters.task_type else None,
-                        "status": filters.status.value if filters.status else None
-                    }
-                }
+                f"Задачи получены: всего={len(tasks)}, "
+                f"фильтры: task_id={filters.task_id}, тип={task_type}, статус={status}"
             )
 
             return tasks
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while fetching tasks by token",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "filters": query
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при получении задач по токену: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to fetch tasks by token",
+                "Ошибка при получении задач по токену",
                 details={"original_error": str(e)}
             )
 
@@ -423,30 +342,16 @@ class TaskManager:
             result = await self.tasks.delete_one({"task_id": task_id})
 
             if result.deleted_count > 0:
-                logger.info(
-                    "Task deleted successfully",
-                    extra={"task_id": task_id}
-                )
+                logger.info(f"Задача удалена успешно: {task_id}")
                 return True
             else:
-                logger.debug(
-                    "Task not found for deletion",
-                    extra={"task_id": task_id}
-                )
+                logger.debug(f"Задача не найдена для удаления: {task_id}")
                 return False
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while deleting task",
-                extra={
-                    "task_id": task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при удалении задачи {task_id}: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to delete task",
+                "Ошибка при удалении задачи",
                 details={
                     "task_id": task_id,
                     "original_error": str(e)
@@ -479,29 +384,18 @@ class TaskManager:
         try:
             result = await self.tasks.delete_many(query)
 
+            statuses_str = ", ".join([s.value for s in statuses]) if statuses else "все"
             logger.info(
-                "Old tasks deleted",
-                extra={
-                    "deleted_count": result.deleted_count,
-                    "older_than": older_than.isoformat(),
-                    "statuses": [s.value for s in statuses] if statuses else "all"
-                }
+                f"Старые задачи удалены: всего удалено={result.deleted_count}, "
+                f"старше={older_than.isoformat()}, статусы={statuses_str}"
             )
 
             return result.deleted_count
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while deleting old tasks",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "query": query
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при удалении старых задач: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to delete old tasks",
+                "Ошибка при удалении старых задач",
                 details={"original_error": str(e)}
             )
 
@@ -537,28 +431,14 @@ class TaskManager:
         try:
             count = await self.tasks.count_documents(query)
 
-            logger.debug(
-                "Tasks counted",
-                extra={
-                    "count": count,
-                    "filters": query
-                }
-            )
+            logger.debug(f"Задачи подсчитаны: всего={count}, фильтры={query}")
 
             return count
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while counting tasks",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "query": query
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при подсчёте задач: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to count tasks",
+                "Ошибка при подсчёте задач",
                 details={"original_error": str(e)}
             )
 
@@ -601,26 +481,14 @@ class TaskManager:
             async for doc in self.tasks.aggregate(pipeline):
                 statistics[doc["_id"]] = doc["count"]
 
-            logger.info(
-                "Task statistics retrieved",
-                extra={
-                    "statistics": statistics,
-                    "filtered_by_token": wb_token is not None
-                }
-            )
+            filtered_str = "с фильтром по токену" if wb_token else "без фильтра"
+            logger.info(f"Статистика задач получена {filtered_str}: {statistics}")
 
             return statistics
 
         except PyMongoError as e:
-            logger.error(
-                "Database error while getting task statistics",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка БД при получении статистики задач: {e}", exc_info=True)
             raise TaskDatabaseError(
-                "Failed to get task statistics",
+                "Ошибка при получении статистики задач",
                 details={"original_error": str(e)}
             )

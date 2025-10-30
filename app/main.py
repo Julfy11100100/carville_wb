@@ -11,16 +11,18 @@ from app.api.default import router as default_router
 from app.api.wildberries import router as wb_router
 from app.containers import Container
 from app.utils.logging import get_logger
-from config import settings
+from app.config import settings
 
 logger = get_logger()
+
+container = Container()
 
 
 def init_dependency_injector() -> Container:
     """
         Инициализация инъекций
     """
-    container = Container()
+
     container.config.from_pydantic(settings=settings, required=True)
 
     container.wire(
@@ -35,25 +37,33 @@ async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения"""
 
     # Startup
-    logger.info("Starting Wildberries API Service...")
+    logger.info("Запуск API-сервиса Wildberries...")
 
     try:
 
         init_dependency_injector()
-        logger.info("Dependency injections")
+        logger.info("Произведены инъекции зависимостей")
+
+        await container.init_resources()
+        logger.info("Ресурсы инициализированы")
 
         # Можно ещё что-нибудь напихать
-        logger.info("Service startup completed")
+        logger.info("Сервис успешно запущен")
 
         yield
 
+        api_instance = container.wildberries_api()
+        await api_instance.close()
+        await container.shutdown_resources()
+
     except Exception as e:
-        logger.error(f"Failed to initialize service: {e}")
+        logger.error(f"Ошибка запуска сервиса: {e}")
         raise
 
     finally:
-        logger.info("Shutting down service...")
-        logger.info("Service shutdown completed")
+
+        logger.info("Отключение службы...")
+        logger.info("Завершение работы сервиса завершено")
 
 
 app = FastAPI(
@@ -123,10 +133,10 @@ async def general_exception_handler(request, exc):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=False,
+        "app.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.RELOAD,
         log_level="error",
         access_log=True
     )

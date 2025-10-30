@@ -1,4 +1,4 @@
-from typing import List, AsyncGenerator
+from typing import List
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
@@ -10,7 +10,7 @@ from app.schemas.task import GetTaskRequest, TaskType
 from app.services.task_manager import TaskManager
 from app.services.wb_client import WildberriesClient
 from app.utils.jwt import is_valid_token
-from app.utils.logging import get_logger, set_task_id
+from app.utils.logging import get_logger
 
 logger = get_logger("api")
 router = APIRouter(prefix="/api")
@@ -39,18 +39,6 @@ def get_wb_token(x_wb_token: str = Header(..., description="WB API токен"))
     return x_wb_token
 
 
-@inject
-async def get_wb_client(
-        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
-) -> AsyncGenerator[WildberriesClient, None]:
-    """
-    Зависимость для получения WildberriesClient с автоматическим закрытием соединения
-    Использует yield для гарантированного закрытия ресурсов после обработки запроса
-    """
-    async with wb_client as client:
-        yield client
-
-
 @router.get("/auth/check_token", tags=["authentication"])
 async def check_token(token: str = Depends(get_wb_token)):
     """
@@ -74,19 +62,12 @@ async def check_token(token: str = Depends(get_wb_token)):
                 detail="Невалидный токен WB API"
             )
 
-        logger.info(
-            "Проверка токена успешна",
-            extra={"token_valid": True}
-        )
+        logger.info("Проверка токена успешна")
 
         return token_data
 
     except Exception as e:
-        logger.error(
-            "Ошибка при проверке токена",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Ошибка при проверке токена: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=401,
@@ -95,9 +76,10 @@ async def check_token(token: str = Depends(get_wb_token)):
 
 
 @router.get("/product/sample", tags=["products"])
+@inject
 async def get_product(
         token: str = Depends(get_wb_token),
-        wb_client: WildberriesClient = Depends(get_wb_client)
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
     """
     Получает один товар для тестирования API
@@ -116,22 +98,14 @@ async def get_product(
         logger.info("Запрос примера товара")
         result = await wb_client.get_product(token=token)
 
-        logger.info(
-            "Пример товара успешно получен",
-            extra={
-                "cards_count": len(result.get("cards", []))
-            }
-        )
+        cards_count = len(result.get("cards", []))
+        logger.info(f"Пример товара успешно получен: {cards_count} товаров")
 
         return result
 
     except WildberriesAPIError as e:
         logger.error(
-            "Ошибка при получении примера товара",
-            extra={
-                "error": str(e),
-                "status_code": e.status_code
-            },
+            f"Ошибка при получении примера товара: {e.message} (код: {e.status_code})",
             exc_info=True
         )
 
@@ -141,11 +115,7 @@ async def get_product(
         )
 
     except Exception as e:
-        logger.error(
-            "Неожиданная ошибка при получении примера товара",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Неожиданная ошибка при получении примера товара: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,
@@ -159,7 +129,7 @@ async def create_products_collection_task(
         background_tasks: BackgroundTasks,
         token: str = Depends(get_wb_token),
         task_manager: TaskManager = Depends(Provide[Container.task_manager]),
-        wb_client: WildberriesClient = Depends(get_wb_client)
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 
 ):
     """
@@ -185,12 +155,9 @@ async def create_products_collection_task(
         active_task = await task_manager.get_active_task_by_token(token)
         if active_task:
             logger.info(
-                "Активная задача уже существует",
-                extra={
-                    "task_id": active_task.task_id,
-                    "status": active_task.status.value,
-                    "progress": f"{active_task.processed_items}/{active_task.total_items}"
-                }
+                f"Активная задача уже существует: {active_task.task_id}, "
+                f"статус={active_task.status.value}, "
+                f"прогресс={active_task.processed_items}/{active_task.total_items}"
             )
             return {
                 "task_id": active_task.task_id,
@@ -210,9 +177,6 @@ async def create_products_collection_task(
             task_type=TaskType.COLLECT_PRODUCTS
         )
 
-        # Устанавливаем task_id в контекст для логирования
-        set_task_id(task.task_id)
-
         # Запускаем фоновую задачу
         background_tasks.add_task(
             wb_client.collect_products_background,
@@ -220,13 +184,7 @@ async def create_products_collection_task(
             task
         )
 
-        logger.info(
-            "Задача сбора товаров успешно создана и запущена",
-            extra={
-                "task_id": task.task_id,
-                "task_type": task.task_type.value
-            }
-        )
+        logger.info(f"Задача сбора товаров успешно создана: {task.task_id}")
 
         return {
             "task_id": task.task_id,
@@ -236,10 +194,7 @@ async def create_products_collection_task(
         }
 
     except TaskAlreadyExistsError as e:
-        logger.warning(
-            "Задача уже существует",
-            extra={"error": str(e)}
-        )
+        logger.warning(f"Задача уже существует: {e.message}")
 
         raise HTTPException(
             status_code=409,
@@ -247,11 +202,7 @@ async def create_products_collection_task(
         )
 
     except TaskDatabaseError as e:
-        logger.error(
-            "Ошибка базы данных при создании задачи",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Ошибка базы данных при создании задачи: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=503,
@@ -259,11 +210,7 @@ async def create_products_collection_task(
         )
 
     except Exception as e:
-        logger.error(
-            "Неожиданная ошибка при создании задачи",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Неожиданная ошибка при создании задачи: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,
@@ -278,7 +225,7 @@ async def create_products_update_task(
         background_tasks: BackgroundTasks,
         token: str = Depends(get_wb_token),
         task_manager: TaskManager = Depends(Provide[Container.task_manager]),
-        wb_client: WildberriesClient = Depends(get_wb_client)
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
     """
     Создаёт асинхронную задачу для обновления товаров.
@@ -303,18 +250,13 @@ async def create_products_update_task(
                 detail="Список товаров не может быть пустым"
             )
 
-        logger.info(
-            "Создание задачи обновления товаров",
-            extra={"products_count": len(products)}
-        )
+        logger.info(f"Создание задачи обновления товаров: {len(products)} товаров")
 
         # Создаём задачу
         task = await task_manager.create_task(
             wb_token=token,
             task_type=TaskType.UPDATE_PRODUCTS
         )
-
-        set_task_id(task.task_id)
 
         # Запускаем фоновую задачу
         background_tasks.add_task(
@@ -324,13 +266,7 @@ async def create_products_update_task(
             task
         )
 
-        logger.info(
-            "Задача обновления товаров успешно создана и запущена",
-            extra={
-                "task_id": task.task_id,
-                "products_count": len(products)
-            }
-        )
+        logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
 
         return {
             "task_id": task.task_id,
@@ -341,11 +277,7 @@ async def create_products_update_task(
         }
 
     except TaskDatabaseError as e:
-        logger.error(
-            "Ошибка базы данных при создании задачи обновления",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=503,
@@ -353,11 +285,7 @@ async def create_products_update_task(
         )
 
     except Exception as e:
-        logger.error(
-            "Неожиданная ошибка при создании задачи обновления",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Неожиданная ошибка при создании задачи обновления: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,
@@ -387,31 +315,19 @@ async def get_task_status(
         HTTPException: Если задача не найдена или ошибка БД
     """
     try:
-        logger.debug(
-            "Получение статуса задачи",
-            extra={"task_id": task_id}
-        )
+        logger.debug(f"Получение статуса задачи: {task_id}")
 
         task = await task_manager.get_task_by_id(token, task_id)
 
         if not task:
-            logger.warning(
-                "Задача не найдена",
-                extra={"task_id": task_id}
-            )
+            logger.warning(f"Задача не найдена: {task_id}")
 
             raise HTTPException(
                 status_code=404,
                 detail=f"Задача с ID {task_id} не найдена"
             )
 
-        logger.debug(
-            "Статус задачи получен",
-            extra={
-                "task_id": task_id,
-                "status": task.status.value
-            }
-        )
+        logger.debug(f"Статус задачи получен: {task_id}, статус={task.status.value}")
 
         return {
             "task_id": task.task_id,
@@ -430,14 +346,7 @@ async def get_task_status(
         }
 
     except TaskDatabaseError as e:
-        logger.error(
-            "Ошибка базы данных при получении статуса задачи",
-            extra={
-                "task_id": task_id,
-                "error": str(e)
-            },
-            exc_info=True
-        )
+        logger.error(f"Ошибка базы данных при получении статуса задачи {task_id}: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=503,
@@ -448,14 +357,7 @@ async def get_task_status(
         raise
 
     except Exception as e:
-        logger.error(
-            "Неожиданная ошибка при получении статуса задачи",
-            extra={
-                "task_id": task_id,
-                "error": str(e)
-            },
-            exc_info=True
-        )
+        logger.error(f"Неожиданная ошибка при получении статуса задачи {task_id}: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,
@@ -485,15 +387,12 @@ async def search_tasks(
         HTTPException: При ошибке БД
     """
     try:
+        task_type = filters.task_type.value if filters.task_type else None
+        status = filters.status.value if filters.status else None
+
         logger.info(
-            "Поиск задач",
-            extra={
-                "filters": {
-                    "task_id": filters.task_id,
-                    "task_type": filters.task_type.value if filters.task_type else None,
-                    "status": filters.status.value if filters.status else None
-                }
-            }
+            f"Поиск задач: task_id={filters.task_id}, "
+            f"task_type={task_type}, status={status}"
         )
 
         tasks = await task_manager.get_tasks_by_token(
@@ -501,10 +400,7 @@ async def search_tasks(
             filters=filters
         )
 
-        logger.info(
-            "Поиск задач завершён",
-            extra={"found_count": len(tasks)}
-        )
+        logger.info(f"Поиск завершён, найдено {len(tasks)} задач")
 
         if not tasks:
             return []
@@ -526,11 +422,7 @@ async def search_tasks(
         ]
 
     except TaskDatabaseError as e:
-        logger.error(
-            "Ошибка базы данных при поиске задач",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Ошибка базы данных при поиске задач: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=503,
@@ -538,11 +430,7 @@ async def search_tasks(
         )
 
     except Exception as e:
-        logger.error(
-            "Неожиданная ошибка при поиске задач",
-            extra={"error": str(e)},
-            exc_info=True
-        )
+        logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,

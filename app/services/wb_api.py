@@ -7,7 +7,7 @@ from aiohttp_retry import RetryClient, ExponentialRetry
 
 from app.exceptions.wb_api import WildberriesRateLimitError, WildberriesAPIError
 from app.utils.logging import get_logger
-from config import settings
+from app.config import settings
 
 logger = get_logger()
 
@@ -18,11 +18,11 @@ class WildberriesAPI:
     """
 
     def __init__(
-        self,
-        base_url: str = None,
-        max_retries: int = None,
-        timeout: int = 30,
-        max_connections: int = 100,
+            self,
+            base_url: str = None,
+            max_retries: int = None,
+            timeout: int = 30,
+            max_connections: int = 100,
     ):
         """
         Args:
@@ -54,15 +54,6 @@ class WildberriesAPI:
         self._session: Optional[aiohttp.ClientSession] = None
         self._retry_client: Optional[RetryClient] = None
 
-    async def __aenter__(self):
-        """Создание сессии при входе в контекстный менеджер"""
-        await self._ensure_session()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Закрытие сессии при выходе из контекстного менеджера"""
-        await self.close()
-
     async def _ensure_session(self):
         """Создаёт сессию, если она ещё не создана"""
         if self._session is None or self._session.closed:
@@ -79,12 +70,8 @@ class WildberriesAPI:
             )
 
             logger.info(
-                "Сессия WB API создана",
-                extra={
-                    "base_url": self.base_url,
-                    "max_retries": self.max_retries,
-                    "max_connections": self.connector.limit
-                }
+                f"Сессия WB API создана: base_url={self.base_url}, "
+                f"max_retries={self.max_retries}, соединений={self.connector.limit}"
             )
 
     async def close(self):
@@ -106,11 +93,11 @@ class WildberriesAPI:
         }
 
     async def make_request(
-        self,
-        method: str,
-        endpoint: str,
-        token: str,
-        **kwargs
+            self,
+            method: str,
+            endpoint: str,
+            token: str,
+            **kwargs
     ) -> Dict[str, Any]:
         """
         Выполняет HTTP-запрос с retry-логикой и обработкой ошибок
@@ -136,103 +123,61 @@ class WildberriesAPI:
         if 'headers' in kwargs:
             headers.update(kwargs.pop('headers'))
 
-        logger.debug(
-            "Выполнение запроса к WB API",
-            extra={
-                "method": method,
-                "endpoint": endpoint,
-                "has_body": "json" in kwargs or "data" in kwargs
-            }
-        )
+        has_body = "json" in kwargs or "data" in kwargs
+        logger.debug(f"Запрос к WB API: {method} {endpoint}, есть body={has_body}")
 
         try:
             async with self._retry_client.request(
-                method, url, headers=headers, **kwargs
+                    method, url, headers=headers, **kwargs
             ) as response:
                 # Обработка различных статус-кодов
                 if response.status == 429:
-                    error_msg = "Превышен лимит запросов"
-                    logger.warning(
-                        error_msg,
-                        extra={
-                            "endpoint": endpoint,
-                            "retry_after": response.headers.get("Retry-After")
-                        }
-                    )
+                    retry_after = response.headers.get("Retry-After")
+                    logger.warning(f"Превышен лимит запросов (429) для {endpoint}, retry-after={retry_after}s")
                     raise WildberriesRateLimitError(
-                        error_msg,
+                        "Превышен лимит запросов",
                         status_code=response.status
                     )
 
                 if response.status >= 400:
                     error_detail = f"Ошибка WB API: {response.status}"
+                    error_data = None
                     try:
                         error_data = await response.json()
                         error_detail = error_data.get('errorText', error_detail)
                         logger.error(
-                            "Ошибочный ответ от WB API",
-                            extra={
-                                "status_code": response.status,
-                                "error_detail": error_detail,
-                                "endpoint": endpoint,
-                                "error_data": error_data
-                            }
-                        )
+                            f"Ошибочный ответ от WB API: статус={response.status}, {endpoint}, ошибка={error_detail}")
                     except Exception:
-                        pass
+                        logger.error(f"Ошибочный ответ от WB API: статус={response.status}, {endpoint}")
 
                     raise WildberriesAPIError(
                         error_detail,
                         status_code=response.status,
-                        response_data=error_data if 'error_data' in locals() else None
+                        response_data=error_data
                     )
 
                 # Успешный ответ
                 result = await response.json() if response.content_length else {}
-                logger.debug(
-                    "Запрос к WB API выполнен успешно",
-                    extra={
-                        "status_code": response.status,
-                        "endpoint": endpoint
-                    }
-                )
+                logger.debug(f"Запрос выполнен успешно: {endpoint}, статус={response.status}")
                 return result
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.error(
-                "Ошибка сети при запросе к WB API",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "endpoint": endpoint
-                },
-                exc_info=True
-            )
+            logger.error(f"Ошибка сети при запросе к WB API {endpoint}: {e}", exc_info=True)
             raise WildberriesAPIError(
-                f"Ошибка сети: {str(e)}",
+                f"Ошибка сети: {e}",
                 response_data={"original_error": str(e)}
             )
         except WildberriesAPIError:
             raise
         except Exception as e:
-            logger.error(
-                "Неожиданная ошибка при запросе к WB API",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "endpoint": endpoint
-                },
-                exc_info=True
-            )
+            logger.error(f"Неожиданная ошибка при запросе к WB API {endpoint}: {e}", exc_info=True)
             raise WildberriesAPIError(
-                f"Неожиданная ошибка: {str(e)}",
+                f"Неожиданная ошибка: {e}",
                 response_data={"original_error": str(e)}
             )
 
     async def get_product(self, token: str) -> Dict[str, Any]:
-        """
-        Получение одного товара
-        """
+        """Получение одного товара"""
         body = {
             "settings": {
                 "cursor": {
@@ -241,6 +186,7 @@ class WildberriesAPI:
                 }
             }
         }
+
         return await self.make_request(
             "POST",
             "/content/v2/get/cards/list",
@@ -249,10 +195,10 @@ class WildberriesAPI:
         )
 
     async def get_products_page(
-        self,
-        token: str,
-        limit: int = 100,
-        cursor: Optional[Dict[str, Any]] = None
+            self,
+            token: str,
+            limit: int = 100,
+            cursor: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Получение страницы товаров с пагинацией
@@ -284,9 +230,9 @@ class WildberriesAPI:
         )
 
     async def update_products(
-        self,
-        token: str,
-        products: List[Dict[str, Any]]
+            self,
+            token: str,
+            products: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Обновление карточек товаров (до 3000 за раз)
@@ -307,10 +253,7 @@ class WildberriesAPI:
                 f"Передано: {len(products)}. Используйте update_products_chunked()."
             )
 
-        logger.info(
-            "Обновление товаров",
-            extra={"count": len(products)}
-        )
+        logger.info(f"Обновление товаров: {len(products)} товаров")
 
         return await self.make_request(
             "POST",
@@ -320,11 +263,11 @@ class WildberriesAPI:
         )
 
     async def update_products_chunked(
-        self,
-        token: str,
-        products: List[Dict[str, Any]],
-        chunk_size: int = 3000,
-        delay_between_chunks: float = 6.0
+            self,
+            token: str,
+            products: List[Dict[str, Any]],
+            chunk_size: int = 3000,
+            delay_between_chunks: float = 6.0
     ) -> List[Dict[str, Any]]:
         """
         Обновление большого количества товаров с автоматическим разбиением на чанки
@@ -343,25 +286,15 @@ class WildberriesAPI:
         total_chunks = (len(products) - 1) // chunk_size + 1
 
         logger.info(
-            "Начало обновления товаров с разбиением на чанки",
-            extra={
-                "total_products": len(products),
-                "chunk_size": chunk_size,
-                "total_chunks": total_chunks
-            }
+            f"Начало обновления товаров с разбиением: "
+            f"всего={len(products)}, размер_чанка={chunk_size}, чанков={total_chunks}"
         )
 
         for i in range(0, len(products), chunk_size):
             chunk = products[i:i + chunk_size]
             chunk_number = i // chunk_size + 1
 
-            logger.info(
-                "Обновление чанка товаров",
-                extra={
-                    "chunk": f"{chunk_number}/{total_chunks}",
-                    "chunk_size": len(chunk)
-                }
-            )
+            logger.info(f"Обновление чанка {chunk_number}/{total_chunks}: {len(chunk)} товаров")
 
             try:
                 result = await self.update_products(token, chunk)
@@ -372,26 +305,15 @@ class WildberriesAPI:
                     await asyncio.sleep(delay_between_chunks)
 
             except WildberriesAPIError as e:
-                logger.error(
-                    "Ошибка при обновлении чанка товаров",
-                    extra={
-                        "chunk": f"{chunk_number}/{total_chunks}",
-                        "error": str(e)
-                    }
-                )
+                logger.error(f"Ошибка при обновлении чанка {chunk_number}/{total_chunks}: {e}")
                 raise
 
-        logger.info(
-            "Обновление товаров с разбиением на чанки завершено",
-            extra={"total_chunks_processed": len(results)}
-        )
+        logger.info(f"Обновление товаров завершено: обработано {len(results)} чанков")
 
         return results
 
     async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> List[Dict[str, Any]]:
-        """
-        Получает все пакеты ошибок для полноценного мониторинга.
-        """
+        """Получает все пакеты ошибок для полноценного мониторинга."""
         all_error_batches = []
         cursor = {"limit": 100}
         iteration = 0
@@ -432,5 +354,5 @@ class WildberriesAPI:
             iteration += 1
             await asyncio.sleep(6)  # rate limit
 
-        logger.info("Сбор ошибок завершен", extra={"total_batches": len(all_error_batches)})
+        logger.info(f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок")
         return all_error_batches

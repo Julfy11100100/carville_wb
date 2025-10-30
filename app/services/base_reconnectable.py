@@ -46,12 +46,12 @@ class ReconnectableService(ABC):
     async def ensure_connection(self) -> None:
         """Обеспечивает активное соединение"""
         if self._is_circuit_open():
-            raise RuntimeError(f"{self.service_name} circuit breaker is open")
+            raise RuntimeError(f"{self.service_name} circuit breaker открыт")
 
         if not self._is_connected:
             async with self._reconnection_lock:
                 if not self._is_connected:
-                    logger.warning(f"Attempting to reconnect to {self.service_name}...")
+                    logger.warning(f"Попытка переподключения к {self.service_name}...")
                     await self._reconnect_with_strategy()
 
     async def health_check(self) -> bool:
@@ -72,7 +72,7 @@ class ReconnectableService(ABC):
             return result
 
         except Exception as e:
-            logger.error(f"{self.service_name} health check failed: {str(e)}")
+            logger.error(f"Проверка здоровья {self.service_name} не пройдена: {e}")
             self._record_failure()
             return False
 
@@ -83,11 +83,11 @@ class ReconnectableService(ABC):
 
         self._is_reconnecting = True
         try:
-            logger.info(f"Starting background reconnection to {self.service_name}...")
+            logger.info(f"Начало фонового переподключения к {self.service_name}...")
             await self._reconnect_with_strategy()
-            logger.info(f"Background reconnection to {self.service_name} completed")
+            logger.info(f"Фоновое переподключение к {self.service_name} завершено")
         except Exception as e:
-            logger.error(f"Background reconnection to {self.service_name} failed: {str(e)}")
+            logger.error(f"Ошибка фонового переподключения к {self.service_name}: {e}")
         finally:
             self._is_reconnecting = False
 
@@ -104,10 +104,10 @@ class ReconnectableService(ABC):
                     await self._connect()
                     self._is_connected = True
                     self._reset_circuit_breaker()
-                    logger.info(f"Successfully reconnected to {self.service_name}")
+                    logger.info(f"Успешное переподключение к {self.service_name}")
                     return
                 except Exception as e:
-                    logger.error(f"{self.service_name} reconnection attempt {attempt + 1}/3 failed: {str(e)}")
+                    logger.error(f"{self.service_name} попытка переподключения {attempt + 1}/3 не удалась: {e}")
                     if attempt < 2:
                         await asyncio.sleep(5)
 
@@ -118,7 +118,7 @@ class ReconnectableService(ABC):
             else:
                 wait_time = max_interval
 
-            logger.info(f"Next {self.service_name} reconnection wave in {wait_time} seconds...")
+            logger.info(f"Следующая волна переподключения к {self.service_name} через {wait_time} сек...")
             await asyncio.sleep(wait_time)
 
     def _is_circuit_open(self) -> bool:
@@ -128,7 +128,7 @@ class ReconnectableService(ABC):
 
         if datetime.now() >= self._circuit_open_until:
             self._circuit_open_until = None
-            logger.info(f"{self.service_name} circuit breaker closed, resuming operations")
+            logger.info(f"Circuit breaker {self.service_name} закрыт, операции возобновлены")
             return False
 
         return True
@@ -140,12 +140,12 @@ class ReconnectableService(ABC):
 
         if self._failed_attempts >= self._max_failed_attempts:
             self._circuit_open_until = datetime.now() + self._circuit_break_duration
-            logger.warning(f"{self.service_name} circuit breaker opened for {self._circuit_break_duration}")
+            logger.warning(f"Circuit breaker {self.service_name} открыт на {self._circuit_break_duration}")
 
     def _reset_circuit_breaker(self) -> None:
         """Сбросить circuit breaker"""
         if self._failed_attempts > 0:
-            logger.info(f"{self.service_name} circuit breaker reset")
+            logger.info(f"Circuit breaker {self.service_name} сброшен")
         self._failed_attempts = 0
         self._circuit_open_until = None
 
@@ -158,16 +158,17 @@ class ReconnectableService(ABC):
             loop.create_task(self.background_reconnect())
         except RuntimeError:
             # Если нет активного loop, просто логируем
-            logger.warning(f"Cannot schedule background reconnect for {self.service_name} - no active event loop")
+            logger.warning(
+                f"Невозможно запланировать фоновое переподключение к {self.service_name} - нет активного event loop")
 
     async def disconnect(self) -> None:
         """Отключение от сервиса"""
         try:
             await self._disconnect()
             self._is_connected = False
-            logger.info(f"Disconnected from {self.service_name}")
+            logger.info(f"Отключено от {self.service_name}")
         except Exception as e:
-            logger.error(f"Error during {self.service_name} disconnection: {str(e)}")
+            logger.error(f"Ошибка при отключении от {self.service_name}: {e}")
 
 
 class RetryService:
@@ -179,7 +180,7 @@ class RetryService:
             max_retries: int = 3,
             base_delay: float = 1.0,
             exponential_backoff: bool = True,
-            operation_name: str = "operation"
+            operation_name: str = "операция"
     ):
         """
         Выполняет операцию с повторными попытками
@@ -197,7 +198,7 @@ class RetryService:
             try:
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1)) if exponential_backoff else base_delay
-                    logger.info(f"Retry {operation_name} attempt {attempt + 1}/{max_retries} after {delay}s delay")
+                    logger.info(f"Повтор {operation_name}: попытка {attempt + 1}/{max_retries} через {delay}с")
                     await asyncio.sleep(delay)
 
                 return await operation()
@@ -208,14 +209,14 @@ class RetryService:
 
                 # Определяем, стоит ли повторять попытку
                 if RetryService._should_retry(error_msg):
-                    logger.warning(f"{operation_name} attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+                    logger.warning(f"{operation_name} попытка {attempt + 1}/{max_retries} не удалась: {error_msg}")
                     if attempt < max_retries - 1:
                         continue
                 else:
-                    logger.error(f"{operation_name} failed with non-retryable error: {error_msg}")
+                    logger.error(f"{operation_name} не удалась с необратимой ошибкой: {error_msg}")
                     break
 
-        logger.error(f"{operation_name} failed after {max_retries} attempts: {str(last_error)}")
+        logger.error(f"{operation_name} не удалась после {max_retries} попыток: {last_error}")
         raise last_error
 
     @staticmethod

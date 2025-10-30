@@ -4,7 +4,7 @@ from app.services.wb_api import WildberriesAPI
 from app.services.category_service import CategoryService
 from app.services.sql_repository import MSSQLDatabaseService
 from app.utils.logging import get_logger
-from config import settings
+from app.config import settings
 
 logger = get_logger()
 

@@ -15,7 +15,7 @@ class ElasticsearchService(ReconnectableService):
     def __init__(self):
         super().__init__("Elasticsearch")
         self.client: Optional[AsyncElasticsearch] = None
-        self._hosts = ["http://127.0.0.1:9200"]
+        self._hosts = ["http://elasticsearch:9200"]
         self._timeout = 120
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
 

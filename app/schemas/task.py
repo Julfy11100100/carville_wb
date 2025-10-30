@@ -10,6 +10,7 @@ class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
 
 

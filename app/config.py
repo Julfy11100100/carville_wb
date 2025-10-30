@@ -1,7 +1,6 @@
 import os
 
 from pydantic_settings import BaseSettings
-from typing import ClassVar
 
 current_path = os.path.abspath(__file__)
 project_root = os.path.dirname(current_path)
@@ -18,14 +17,15 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-
-    # Redis настройки
-    REDIS_URL: str = "redis://localhost:6379/0"
+    RELOAD: bool = False
 
     # Mongo настройки
-    MONGO_URL: str = "mongodb://localhost:27017"
+    MONGO_URL: str = "localhost"
+    MONGO_PORT: int = 27017
     MONGO_DB_NAME: str = "general"
     MONGO_COLLECTION_NAME: str = "tasks"
+    MONGO_INITDB_ROOT_USERNAME: str = "user"
+    MONGO_INITDB_ROOT_PASSWORD: str = "passwd"
 
     # MS SQL SERVER настройки
     DB_SERVER: str = ""
@@ -46,10 +46,9 @@ class Settings(BaseSettings):
     # Дефолтный токен для получения например дерева категорий
     DEFAULT_WB_TOKEN: str = ""
 
-
-
     class Config:
         env_file = f"{project_root}/.env"
 
 
 settings = Settings()
+MONGO_URI = f"mongodb://{settings.MONGO_INITDB_ROOT_USERNAME}:{settings.MONGO_INITDB_ROOT_PASSWORD}@{settings.MONGO_URL}:{settings.MONGO_PORT}"

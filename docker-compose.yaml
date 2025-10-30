@@ -1,20 +1,77 @@
-version: '3.8'
-
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    image: elasticsearch:8.11.0
     container_name: elasticsearch
+    restart: unless-stopped
     environment:
       - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms512m -Xmx1g
       - xpack.security.enabled=false
-      - cluster.name=wb-cluster
-    ports:
-      - "9200:9200"
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
-      - esdata:/usr/share/elasticsearch/data
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - marketplace_network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
     restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
+    env_file:
+      - ./app/.env
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      - "${MONGO_PORT}:27017"
+    networks:
+      - marketplace_network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "1"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wb_manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wb_manager
+    restart: unless-stopped
+    env_file:
+      - ./app/.env
+    volumes:
+      - ./${LOG_FOLDER}:/app/${LOG_FOLDER}
+    networks:
+      - marketplace_network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "1"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
 
 volumes:
-  esdata:
-    driver: local
+  elasticsearch_data:
+  mongodb_data:
+
+networks:
+  marketplace_network:
+    driver: bridge

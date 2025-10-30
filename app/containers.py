@@ -1,5 +1,6 @@
 from dependency_injector import containers, providers
 
+from app.config import MONGO_URI
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
 from app.services.task_manager import TaskManager
@@ -13,7 +14,7 @@ class Container(containers.DeclarativeContainer):
     # Асинхронный ресурс — клиент MongoDB
     mongo_client = providers.Resource(
         init_mongo_client,
-        mongo_uri=config.MONGO_URL
+        mongo_uri=MONGO_URI
     )
 
     # Асинхронный ресурс — коллекция MongoDB
@@ -24,21 +25,21 @@ class Container(containers.DeclarativeContainer):
         collection_name=config.MONGO_COLLECTION_NAME
     )
 
-    mongo_service = providers.Factory(
+    mongo_service = providers.Singleton(
         MongoService,
         collection=mongo_collection,
     )
 
-    task_manager = providers.Factory(
+    task_manager = providers.Singleton(
         TaskManager,
         mongo_service=mongo_service
     )
 
-    elasticsearch_service = providers.Factory(
+    elasticsearch_service = providers.Singleton(
         ElasticsearchService
     )
 
-    wildberries_api = providers.Factory(
+    wildberries_api = providers.Singleton(
         WildberriesAPI,
         base_url=config.WB_CONTENT_API_URL,
         max_retries=config.MAX_RETRIES,
