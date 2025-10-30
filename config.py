@@ -39,12 +39,14 @@ class Settings(BaseSettings):
     WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
     # WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
-    # Дефолтный токен для получения например дерева категорий
-    DEFAULT_WB_TOKEN: str = ""
-
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30
     MAX_RETRIES: int = 3
+
+    # Дефолтный токен для получения например дерева категорий
+    DEFAULT_WB_TOKEN: str = ""
+
+
 
     class Config:
         env_file = f"{project_root}/.env"

@@ -282,11 +282,12 @@ class TaskManager:
                 }
             )
 
-    async def get_task_by_id(self, task_id: str) -> Optional[TaskInfo]:
+    async def get_task_by_id(self, wb_token: str, task_id: str) -> Optional[TaskInfo]:
         """
         Получает задачу по её ID.
 
         Args:
+            wb_token: WildBerries API токен
             task_id: ID задачи
 
         Returns:
@@ -296,7 +297,11 @@ class TaskManager:
             TaskDatabaseError: При ошибке запроса к базе данных
         """
         try:
-            doc = await self.tasks.find_one({"task_id": task_id})
+            doc = await self.tasks.find_one(
+                {
+                    "task_id": task_id,
+                    "wb_token": hash_token(wb_token)
+                })
 
             if not doc:
                 logger.debug(

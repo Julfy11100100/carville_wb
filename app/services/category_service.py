@@ -1,8 +1,7 @@
 from typing import List, Dict, Any
 
-from app.services.wb_client import WildberriesClient
+from app.services.wb_api import WildberriesAPI
 from app.utils.logging import get_logger
-from config import settings
 
 logger = get_logger()
 
@@ -10,16 +9,18 @@ logger = get_logger()
 class CategoryService:
     """
     Сервис для работы с категориями товаров WB
-
-    Выделен в отдельный класс по принципу Single Responsibility
     """
 
-    def __init__(self, wb_client: WildberriesClient = None):
-        self.wb_client = wb_client if wb_client else WildberriesClient()
+    def __init__(self, wb_api: WildberriesAPI):
+        """
+        Args:
+            wb_api: Инстанс WildberriesAPI
+        """
+        self.wb_api = wb_api
 
     async def get_parent_categories(self, token: str) -> List[Dict[str, Any]]:
         """Получает родительские категории"""
-        response = await self.wb_client.make_request(
+        response = await self.wb_api.make_request(
             "GET",
             "/content/v2/object/parent/all",
             token
@@ -33,7 +34,7 @@ class CategoryService:
             parent_id: str
     ) -> List[Dict[str, Any]]:
         """Получает дочерние категории по parent_id"""
-        response = await self.wb_client.make_request(
+        response = await self.wb_api.make_request(
             "GET",
             "/content/v2/object/all",
             token,
@@ -44,11 +45,9 @@ class CategoryService:
         )
         return response.get("data", [])
 
-    async def create_categories_tree(self) -> Dict[str, Any]:
+    async def create_categories_tree(self, token: str) -> Dict[str, Any]:
         """Создаёт полное дерево категорий"""
         logger.info("Строим дерево категорий")
-
-        token = settings.DEFAULT_WB_TOKEN
 
         parent_categories = await self.get_parent_categories(token)
         tree = {

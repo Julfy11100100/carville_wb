@@ -1,7 +1,9 @@
 from dependency_injector import containers, providers
 
+from app.services.elasticsearch_service import ElasticsearchService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
 from app.services.task_manager import TaskManager
+from app.services.wb_api import WildberriesAPI
 from app.services.wb_client import WildberriesClient
 
 
@@ -22,7 +24,6 @@ class Container(containers.DeclarativeContainer):
         collection_name=config.MONGO_COLLECTION_NAME
     )
 
-    # Сервис для работы с Mongo, фабрика создаёт экземпляры с коллекцией
     mongo_service = providers.Factory(
         MongoService,
         collection=mongo_collection,
@@ -33,7 +34,21 @@ class Container(containers.DeclarativeContainer):
         mongo_service=mongo_service
     )
 
+    elasticsearch_service = providers.Factory(
+        ElasticsearchService
+    )
+
+    wildberries_api = providers.Factory(
+        WildberriesAPI,
+        base_url=config.WB_CONTENT_API_URL,
+        max_retries=config.MAX_RETRIES,
+        timeout=config.REQUEST_TIMEOUT
+
+    )
+
     wildberries_client = providers.Factory(
         WildberriesClient,
-        task_manager=task_manager
+        task_manager=task_manager,
+        elasticsearch_service=elasticsearch_service,
+        api_client=wildberries_api
     )
