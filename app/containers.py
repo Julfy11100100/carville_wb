@@ -1,6 +1,6 @@
 from dependency_injector import containers, providers
 
-from app.config import MONGO_URI
+from config import MONGO_URI
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
 from app.services.task_manager import TaskManager

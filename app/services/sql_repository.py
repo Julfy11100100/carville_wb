@@ -5,7 +5,7 @@ from typing import Dict, Any
 import aioodbc
 
 from app.utils.logging import get_logger
-from app.config import settings
+from config import settings
 
 logger = get_logger()
 

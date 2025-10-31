@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
-from app.config import settings
+from config import settings
 
 
 class ColoredFormatter(logging.Formatter):

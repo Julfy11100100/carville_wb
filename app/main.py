@@ -11,7 +11,7 @@ from app.api.default import router as default_router
 from app.api.wildberries import router as wb_router
 from app.containers import Container
 from app.utils.logging import get_logger
-from app.config import settings
+from config import settings
 
 logger = get_logger()
 

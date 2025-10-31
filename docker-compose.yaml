@@ -9,6 +9,8 @@ services:
       - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
     networks:
       - marketplace_network
     logging:
@@ -29,7 +31,7 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
     env_file:
-      - ./app/.env
+      - .env
     volumes:
       - mongodb_data:/data/db
     ports:
@@ -53,9 +55,11 @@ services:
     container_name: wb_manager
     restart: unless-stopped
     env_file:
-      - ./app/.env
+      - .env
     volumes:
-      - ./${LOG_FOLDER}:/app/${LOG_FOLDER}
+      - ./${LOG_FOLDER}:/project/${LOG_FOLDER}
+    ports:
+      - "${PORT}:${PORT}"
     networks:
       - marketplace_network
     logging:

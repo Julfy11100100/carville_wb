@@ -7,7 +7,7 @@ from aiohttp_retry import RetryClient, ExponentialRetry
 
 from app.exceptions.wb_api import WildberriesRateLimitError, WildberriesAPIError
 from app.utils.logging import get_logger
-from app.config import settings
+from config import settings
 
 logger = get_logger()
 

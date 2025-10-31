@@ -1,6 +1,6 @@
 import jwt
 
-from app.config import settings
+from config import settings
 
 
 def is_valid_token(token: str):

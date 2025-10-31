@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
-from app.config import settings
+from config import settings
 
 router = APIRouter(prefix="/api", tags=["default"])
 
