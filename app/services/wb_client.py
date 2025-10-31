@@ -101,7 +101,7 @@ class WildberriesClient:
 
             # Индексируем
             await self.elasticsearch_service.index_products(
-                token=hash_token(token)[:10],
+                token=hash_token(token),
                 products=all_products
             )
 

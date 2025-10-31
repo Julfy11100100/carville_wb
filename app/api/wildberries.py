@@ -6,11 +6,15 @@ from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
 from app.containers import Container
 from app.exceptions.task import TaskAlreadyExistsError, TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
+from app.schemas.product_match import ProductMatchRequest
 from app.schemas.task import GetTaskRequest, TaskType
+from app.services.product_match_service import ProductMatchService
 from app.services.task_manager import TaskManager
 from app.services.wb_client import WildberriesClient
 from app.utils.jwt import is_valid_token
 from app.utils.logging import get_logger
+from app.utils.token import hash_token
+from app.validators.product_match_validator import ProductMatchValidator, validate_product_match_request
 
 logger = get_logger("api")
 router = APIRouter(prefix="/api")
@@ -430,6 +434,82 @@ async def search_tasks(
         )
 
     except Exception as e:
+        logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка сервера"
+        )
+
+
+@router.post("/match", tags=["products"])
+@inject
+async def match_products(
+        request: ProductMatchRequest = Depends(validate_product_match_request),
+        token: str = Depends(get_wb_token),
+        product_match_service: ProductMatchService = Depends(Provide[Container.product_match_service])
+):
+    """
+    Сопостовляем товары WB с товарами из БД
+
+    Args:
+        request: ProductMatchRequest
+        token: WB API токен из заголовка
+        product_match_service: сервис мэтча товаров
+
+    Returns:
+        ProductMatchResponse - те же данные что были отправлены в запросе + список сматченных товаров
+
+    """
+    try:
+        # Валидация входных параметров
+        ProductMatchValidator.validate_match_request(request)
+
+        result = await product_match_service.match_products(
+            token=hash_token(token),
+            wb_match_field=request.wb_match_field,
+            carville_match_field=request.carville_match_field,
+            category_id=request.category_id,
+            comparison_field=request.comparison_field,
+            brand=request.brand
+        )
+
+        # Логируем то, что вернул сервис
+        result_status = result.get("status", "error")
+        result_message = result.get("message", None)
+        result_products = result.get("products", [])
+        total_products_count = result.get("total_products")
+        matched_products_count = result.get("matched_products")
+        sample_count = min(3, len(result_products))
+
+        logger.info(f"Статус сопоставления товаров: {result_status}")
+        logger.info(f"Результат сопоставления товаров: {result_message}")
+        logger.info(f"Количество сопоставленных товаров: {len(result_products)}")
+        logger.info(f"Примеры сопоставленных товаров ({sample_count}): {result_products[:sample_count]}")
+
+        if result_status != "success":
+            error_msg = result_message
+            logger.error(f"Ошибка сопоставления продуктов: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Ошибка сопоставления продуктов", "details": error_msg}
+            )
+
+        logger.info(f"✅ Product matching completed successfully for token {hash_token(token)}")
+
+        return {
+            "ozon_match_field": request.wb_match_field,
+            "carville_match_field": request.carville_match_field,
+            "category_id": request.category_id,
+            "comparison_field": request.comparison_field,
+            "brand": request.brand,
+            "products": result_products,
+            "total_products": total_products_count,
+            "matched_products": matched_products_count
+        }
+
+    except Exception as e:
+
         logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
 
         raise HTTPException(

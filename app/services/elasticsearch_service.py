@@ -138,11 +138,11 @@ class ElasticsearchService(ReconnectableService):
                         "dynamic": False,  # Отключаем динамическую индексацию
                         "properties": {
                             # Идентификаторы WB
-                            "nmId": {"type": "long"},  # Артикул WB (основной идентификатор)
+                            "nmID": {"type": "long"},  # Артикул WB (основной идентификатор)
                             "vendorCode": {"type": "keyword"},  # Артикул продавца
 
                             # Категоризация
-                            "subjectId": {"type": "long"},  # ID предмета/категории
+                            "subjectID": {"type": "long"},  # ID предмета/категории
                             "subjectName": {"type": "text", "analyzer": "standard"},  # Название предмета
                             "parentId": {"type": "long"},  # ID родительской категории
 
@@ -150,9 +150,6 @@ class ElasticsearchService(ReconnectableService):
                             "brand": {"type": "keyword"},  # Бренд
                             "title": {"type": "text", "analyzer": "standard"},  # Название товара
                             "description": {"type": "text", "analyzer": "standard"},  # Описание
-
-                            # Штрихкоды
-                            "barcode": {"type": "keyword"},  # Основной баркод
                         }
                     }
                 }
@@ -317,6 +314,7 @@ class ElasticsearchService(ReconnectableService):
             if fields:
                 search_body["_source"] = fields
 
+            logger.info(f"Ищем товары дял индекса {index_name} по запросу:{search_body}")
             response = await self.client.search(
                 index=index_name,
                 body=search_body

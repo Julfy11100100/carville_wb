@@ -7,7 +7,7 @@ class ProductMatchRequest(BaseModel):
     """Запрос на сопоставление товаров"""
 
     wb_match_field: str = Field(...,
-                                  description="Поле по которому будем матчить полученные товары из API с нашими")
+                                description="Поле по которому будем матчить полученные товары из API с нашими")
     carville_match_field: str = Field(..., description="Поле в нашей БД с которым будем матчить продукты")
     category_id: int = Field(..., description="ID категории товаров которые будем матчить")
     comparison_field: str = Field(..., description="Имя поля которое будем сравнивать у сматченных объектов")

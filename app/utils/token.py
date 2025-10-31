@@ -1,4 +1,4 @@
 import hashlib
 
 def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hashlib.sha256(token.encode()).hexdigest()[:8]

@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     DB_DRIVER: str = 'ODBC Driver 17 for SQL Server'
 
     # WB API настройки
-    WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
-    # WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

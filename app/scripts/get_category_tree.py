@@ -19,24 +19,23 @@ async def insert_categories():
     ms_sql_client = MSSQLDatabaseService()
 
     try:
-        async with wb_api:
-            logger.info("Начинаем получение дерева категорий")
+        logger.info("Начинаем получение дерева категорий")
 
-            categories_tree = await category_service.create_categories_tree(
-                token=settings.DEFAULT_WB_TOKEN
-            )
+        categories_tree = await category_service.create_categories_tree(
+            token=settings.DEFAULT_WB_TOKEN
+        )
 
-            logger.info(
-                f"Получено категорий: {len(categories_tree.get('categories', {}))}. "
-                f"Начинаем синхронизацию с БД"
-            )
+        logger.info(
+            f"Получено категорий: {len(categories_tree.get('categories', {}))}. "
+            f"Начинаем синхронизацию с БД"
+        )
 
-            result = await ms_sql_client.sync_categories_tree_to_db(
-                tree_data=categories_tree
-            )
+        result = await ms_sql_client.sync_categories_tree_to_db(
+            tree_data=categories_tree
+        )
 
-            logger.info(f"Результат синхронизации категорий: {result}")
-            return result
+        logger.info(f"Результат синхронизации категорий: {result}")
+        return result
 
     except Exception as e:
         logger.error(
@@ -44,6 +43,8 @@ async def insert_categories():
             exc_info=True
         )
         raise
+    finally:
+        await wb_api.close()
 
 
 if __name__ == "__main__":

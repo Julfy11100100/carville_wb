@@ -1,11 +1,13 @@
 from dependency_injector import containers, providers
 
-from config import MONGO_URI
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoService
+from app.services.product_match_service import ProductMatchService
+from app.services.sql_database import SQLDatabaseService
 from app.services.task_manager import TaskManager
 from app.services.wb_api import WildberriesAPI
 from app.services.wb_client import WildberriesClient
+from config import MONGO_URI
 
 
 class Container(containers.DeclarativeContainer):
@@ -52,4 +54,14 @@ class Container(containers.DeclarativeContainer):
         task_manager=task_manager,
         elasticsearch_service=elasticsearch_service,
         api_client=wildberries_api
+    )
+
+    sql_database_service = providers.Singleton(
+        SQLDatabaseService
+    )
+
+    product_match_service = providers.Factory(
+        ProductMatchService,
+        elasticsearch_service=elasticsearch_service,
+        database_service=sql_database_service
     )
