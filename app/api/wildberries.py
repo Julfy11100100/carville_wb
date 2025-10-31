@@ -14,7 +14,6 @@ from app.services.wb_client import WildberriesClient
 from app.utils.jwt import is_valid_token
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
-from app.validators.product_match_validator import ProductMatchValidator, validate_product_match_request
 
 logger = get_logger("api")
 router = APIRouter(prefix="/api")
@@ -445,7 +444,7 @@ async def search_tasks(
 @router.post("/match", tags=["products"])
 @inject
 async def match_products(
-        request: ProductMatchRequest = Depends(validate_product_match_request),
+        request: ProductMatchRequest,
         token: str = Depends(get_wb_token),
         product_match_service: ProductMatchService = Depends(Provide[Container.product_match_service])
 ):
@@ -462,9 +461,6 @@ async def match_products(
 
     """
     try:
-        # Валидация входных параметров
-        ProductMatchValidator.validate_match_request(request)
-
         result = await product_match_service.match_products(
             token=hash_token(token),
             wb_match_field=request.wb_match_field,
@@ -511,6 +507,81 @@ async def match_products(
     except Exception as e:
 
         logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка сервера"
+        )
+
+
+@router.post("/product/update_basic", tags=["products"])
+@inject
+async def create_products_update_task_basic(
+        products: List[dict],
+        background_tasks: BackgroundTasks,
+        token: str = Depends(get_wb_token),
+        task_manager: TaskManager = Depends(Provide[Container.task_manager]),
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
+):
+    """
+    Создаёт асинхронную задачу для обновления товаров.
+
+    Args:
+        products: Список товаров для обновления
+        background_tasks: Фоновые задачи FastAPI
+        token: WB API токен из заголовка
+        task_manager: Менеджер задач
+        wb_client: Клиент для работы с WB
+
+    Returns:
+        Информация о созданной задаче
+
+    Raises:
+        HTTPException: При ошибках создания задачи
+    """
+    try:
+        if not products:
+            raise HTTPException(
+                status_code=400,
+                detail="Список товаров не может быть пустым"
+            )
+
+        logger.info(f"Создание задачи обновления товаров: {len(products)} товаров")
+
+        # Создаём задачу
+        task = await task_manager.create_task(
+            wb_token=token,
+            task_type=TaskType.UPDATE_PRODUCTS
+        )
+
+        # Запускаем фоновую задачу
+        background_tasks.add_task(
+            wb_client.update_products_background,
+            token,
+            products,
+            task
+        )
+
+        logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
+
+        return {
+            "task_id": task.task_id,
+            "status": task.status.value,
+            "message": "Задача обновления успешно создана",
+            "created_at": task.created_at.isoformat(),
+            "total_items": len(products)
+        }
+
+    except TaskDatabaseError as e:
+        logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
+
+        raise HTTPException(
+            status_code=503,
+            detail="Сервис базы данных недоступен"
+        )
+
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при создании задачи обновления: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,

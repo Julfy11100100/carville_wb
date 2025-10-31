@@ -1,6 +1,6 @@
 from typing import List, Union, Optional
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.constants.validators import VALID_WB_FIELDS, VALID_CARVILLE_FIELDS, VALID_COMPARISON_FIELDS
 
 
 class ProductMatchRequest(BaseModel):
@@ -12,6 +12,33 @@ class ProductMatchRequest(BaseModel):
     category_id: int = Field(..., description="ID категории товаров которые будем матчить")
     comparison_field: str = Field(..., description="Имя поля которое будем сравнивать у сматченных объектов")
     brand: Optional[int] = Field(None, description="Бренд для фильтрации")
+
+    @field_validator('wb_match_field')
+    def validate_wb_match_field(cls, v):
+        if v not in VALID_WB_FIELDS:
+            raise ValueError(
+                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)}")
+        return v
+
+    @field_validator('carville_match_field')
+    def validate_carville_match_field(cls, v):
+        if v not in VALID_CARVILLE_FIELDS:
+            raise ValueError(
+                f"Недопустимое carville_match_field '{v}' Допустимые поля {','.join(VALID_CARVILLE_FIELDS)}")
+        return v
+
+    @field_validator('comparison_field')
+    def validate_comparison_field(cls, v):
+        if v not in VALID_COMPARISON_FIELDS:
+            raise ValueError(
+                f"Недопустимое comparison_field '{v}' Допустимые поля {','.join(VALID_COMPARISON_FIELDS)}")
+        return v
+
+    @field_validator('category_id')
+    def validate_category_id(cls, v):
+        if v < 0:
+            raise ValueError(f"Поле category_id не может быть отрицательным")
+        return v
 
 
 class ProductMatchResponse(BaseModel):
