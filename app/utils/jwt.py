@@ -8,7 +8,7 @@ def is_valid_token(token: str):
     Проверка токена на валидность
     """
 
-    # Для работы с
+    # Для работы с тестовыми
     if settings.DEBUG:
         return True
 

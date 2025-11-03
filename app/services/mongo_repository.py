@@ -20,7 +20,7 @@ async def init_mongo_collection(client: AsyncIOMotorClient, db_name: str,
     return collection
 
 
-class MongoService:
+class MongoRepository:
     def __init__(self, collection: AsyncIOMotorCollection):
         self.collection = collection
 

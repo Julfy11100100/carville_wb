@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     DB_USER: str = ""
     DB_PASSWORD: str = ""
     DB_DRIVER: str = 'ODBC Driver 17 for SQL Server'
+    # Порог 'свежих' категорий из бд. В часах
+    WB_TYPES_MAX_AGE_HOURS: int = 24
 
     # WB API настройки
     # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"

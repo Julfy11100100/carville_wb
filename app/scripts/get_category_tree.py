@@ -1,8 +1,9 @@
 import asyncio
 
+from app.services.api_category_service import ApiCategoryService
+from app.services.sql_category_service import SqlCategoryService
+from app.services.sql_repository import SQLDatabaseRepository
 from app.services.wb_api import WildberriesAPI
-from app.services.category_service import CategoryService
-from app.services.sql_repository import MSSQLDatabaseService
 from app.utils.logging import get_logger
 from config import settings
 
@@ -15,13 +16,14 @@ async def insert_categories():
     """
     # Создаем экземпляры сервисов
     wb_api = WildberriesAPI()
-    category_service = CategoryService(wb_api)
-    ms_sql_client = MSSQLDatabaseService()
+    sql_repository = SQLDatabaseRepository()
+    api_category_service = ApiCategoryService(wb_api)
+    sql_category_service = SqlCategoryService(sql_repository)
 
     try:
         logger.info("Начинаем получение дерева категорий")
 
-        categories_tree = await category_service.create_categories_tree(
+        categories_tree = await api_category_service.create_categories_tree(
             token=settings.DEFAULT_WB_TOKEN
         )
 
@@ -30,7 +32,7 @@ async def insert_categories():
             f"Начинаем синхронизацию с БД"
         )
 
-        result = await ms_sql_client.sync_categories_tree_to_db(
+        result = await sql_category_service.sync_categories_tree_to_db(
             tree_data=categories_tree
         )
 
@@ -45,7 +47,23 @@ async def insert_categories():
         raise
     finally:
         await wb_api.close()
+        await sql_repository.close_pool()
+
+
+async def check_logic():
+    sql_repository = SQLDatabaseRepository()
+    sql_category_service = SqlCategoryService(sql_repository)
+    try:
+        result = await sql_category_service.get_types_tree()
+        print(f"РЕЗУЛЬТАТ")
+        from pprint import pprint
+        pprint(result)
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    finally:
+        await sql_repository.close_pool()
 
 
 if __name__ == "__main__":
-    asyncio.run(insert_categories())
+    # asyncio.run(insert_categories())
+    asyncio.run(check_logic())

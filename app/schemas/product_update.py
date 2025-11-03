@@ -20,18 +20,22 @@ class ProductUpdateRequest(BaseModel):
     def validate_field(cls, v):
         if v not in ALLOWED_FIELDS_FOR_UPDATES:
             raise ValueError(
-                f"Недопустимое update_field '{v}' Допустимые поля {','.join(ALLOWED_FIELDS_FOR_UPDATES.keys())}")
+                f"Недопустимое update_field '{v}' Допустимые поля {', '.join(ALLOWED_FIELDS_FOR_UPDATES.keys())}")
         return v
 
     @field_validator('products', mode='after')
     def validate_products(cls, v, info: ValidationInfo):
         # Уникальность
-        if len(set(str(p.offer_id) for p in v)) != len(v):
-            raise ValueError("offer_id должны быть уникальными")
+        if len(set(str(p.nm_id) for p in v)) != len(v):
+            raise ValueError("nm_id должны быть уникальными")
 
         # Типы значений
         field_name = info.data.get('update_field')
-        expected_type = ALLOWED_FIELDS_FOR_UPDATES.get(field_name)
+        expected_type = ALLOWED_FIELDS_FOR_UPDATES.get(field_name, None)
+
+        if not expected_type:
+            raise ValueError(
+                f"Недопустимое update_field '{field_name}' Допустимые поля {', '.join(ALLOWED_FIELDS_FOR_UPDATES.keys())}")
 
         for idx, product in enumerate(v):
             if not isinstance(product.value, expected_type):

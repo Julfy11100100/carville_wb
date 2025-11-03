@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import PyMongoError, DuplicateKeyError
 
-from app.services.mongo_repository import MongoService
+from app.services.mongo_repository import MongoRepository
 from app.exceptions.task import TaskDatabaseError, TaskAlreadyExistsError
 from app.schemas.task import TaskInfo, TaskStatus, TaskType, GetTaskRequest
 from app.utils.logging import get_logger
@@ -23,7 +23,7 @@ class TaskManager:
     с полной обработкой ошибок и оптимизированными запросами.
     """
 
-    def __init__(self, mongo_service: MongoService):
+    def __init__(self, mongo_service: MongoRepository):
         """
         Args:
             mongo_service: Сервис для работы с MongoDB

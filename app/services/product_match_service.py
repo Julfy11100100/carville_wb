@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Optional
 
 from app.exceptions.sql_database import DatabaseError
 from app.services.elasticsearch_service import ElasticsearchService
-from app.services.sql_database import SQLDatabaseService
+from app.services.sql_repository import SQLDatabaseRepository
 from app.utils.logging import get_logger
 from config import settings
 
@@ -17,7 +17,7 @@ class ProductMatchService:
         "subjectName": "ozon_name"
     }  # процедура в бд ожидает другие имена
 
-    def __init__(self, elasticsearch_service: ElasticsearchService, database_service: SQLDatabaseService):
+    def __init__(self, elasticsearch_service: ElasticsearchService, database_service: SQLDatabaseRepository):
         self.elasticsearch_service = elasticsearch_service
         self.database_service = database_service
 

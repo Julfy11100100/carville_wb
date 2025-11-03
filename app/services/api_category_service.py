@@ -6,7 +6,7 @@ from app.utils.logging import get_logger
 logger = get_logger()
 
 
-class CategoryService:
+class ApiCategoryService:
     """
     Сервис для работы с категориями товаров WB
     """

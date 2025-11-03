@@ -1,308 +1,152 @@
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, Any
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 import aioodbc
 
+from app.exceptions.sql_database import DatabaseError
+from app.services.base_reconnectable import ReconnectableService
 from app.utils.logging import get_logger
 from config import settings
 
 logger = get_logger()
 
 
-class MSSQLDatabaseService:
-    """Сервис для работы с базой данных MS SQL"""
+class SQLDatabaseRepository(ReconnectableService):
 
-    def __init__(self, table: str = "wb_type", categories_file: str = "categories.json"):
+    def __init__(self):
+        super().__init__("Database")
         self.connection_string = self._build_connection_string()
-        self.table = table
-        self.schemes_path = Path("data/static/categories") / categories_file
+        self._pool = None
 
     def _build_connection_string(self) -> str:
-        """Построить строку подключения к БД"""
+        """Формирует строку подключения к MSSQL"""
         return (
-            f"DRIVER={{{settings.DB_DRIVER}}};"
-            f"SERVER={settings.DB_SERVER},{settings.DB_PORT};"
-            f"DATABASE={settings.DB_NAME};"
+            f"Driver={settings.DB_DRIVER};"
+            f"Server={settings.DB_SERVER},{settings.DB_PORT};"
+            f"Database={settings.DB_NAME};"
             f"UID={settings.DB_USER};"
             f"PWD={settings.DB_PASSWORD};"
-            f"TrustServerCertificate=yes;"
+            "Encrypt=yes;"
+            "TrustServerCertificate=yes;"
+            "Connection Timeout=30;"
         )
 
-    async def sync_categories_tree_to_db(self, tree_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Синхронизация структурированного дерева категорий с БД
-        """
-        if not tree_data or not any(tree_data.values()):
-            logger.warning("Отсутствуют данные для синхронизации")
-            return {
-                "status": "error",
-                "message": "Отсутствуют данные для синхронизации",
-                "statistics": {}
-            }
+    async def _connect(self):
+        """Создает пул соединений"""
+        if self._pool:
+            await self._disconnect()
 
-        logger.info(f"Стартуем синхронизацию: {len(tree_data.get('root_categories', {}))} родительских категорий, "
-                    f"{len(tree_data.get('categories', {}))} категорий")
+        self._pool = await aioodbc.create_pool(
+            dsn=self.connection_string,
+            minsize=1,
+            maxsize=10,  # Захардкожено как было в конфиге
+            timeout=30
+        )
+        logger.info("Database pool created successfully")
+
+    async def _disconnect(self):
+        """Закрывает пул соединений"""
+        if self._pool:
+            self._pool.close()
+            await self._pool.wait_closed()
+            self._pool = None
+
+    async def _health_check(self) -> bool:
+        """Проверка здоровья БД"""
+        if not self._pool:
+            return False
 
         try:
-            # Подключаемся к БД
-            async with aioodbc.connect(dsn=self.connection_string) as conn:
-                conn.autocommit = False
+            async with self._pool.acquire() as conn:
+                # Устанавливаем короткий LOCK_TIMEOUT для health check (1 секунда)
+                try:
+                    async with conn.cursor() as timeout_cursor:
+                        await timeout_cursor.execute("SET LOCK_TIMEOUT 1000")
+                except Exception:
+                    pass  # Игнорируем ошибку установки timeout
 
                 async with conn.cursor() as cursor:
-                    # Инициализируем статистику
-                    statistics = {
-                        'updated_roots': 0,
-                        'updated_categories': 0,
-                        'created_roots': 0,
-                        'created_categories': 0,
-                        'name_changes_roots': 0,
-                        'name_changes_categories': 0,
-                        # Детальная статистика
-                        'new_roots': [],  # список новых корневых категорий
-                        'new_categories': [],  # список новых категорий
-                        'renamed_roots': [],  # список переименованных корневых категорий
-                        'renamed_categories': [],  # список переименованных категорий
-                    }
-
-                    # Словари для маппинга ID на новые ID записей в БД
-                    root_id_mapping = {}
-                    category_id_mapping = {}
-
-                    # 1. Синхронизация корневых категорий
-                    logger.info("Синхронизация родительских категорий")
-                    start_time = datetime.now()
-                    await self._sync_root_categories(cursor, tree_data['root_categories'], statistics, root_id_mapping)
-                    logger.info(
-                        f"Синхронизация родительских категорий завершена за {(datetime.now() - start_time).total_seconds():.1f}s")
-
-                    # 2. Синхронизация подкатегорий
-                    logger.info("Синхронизация категорий")
-                    start_time = datetime.now()
-                    await self._sync_categories(cursor, tree_data['categories'], tree_data['root_categories'],
-                                          statistics, category_id_mapping, root_id_mapping)
-                    logger.info(
-                        f"Синхронизация категорий завершена за {(datetime.now() - start_time).total_seconds():.1f}s")
-
-                    logger.info(f"Завершили синхронизацию")
-
-                    await conn.commit()
-
-                    # Подсчитываем общее количество операций (только числа, не списки)
-                    total_operations = (
-                            statistics['updated_roots'] + statistics['updated_categories'] +
-                            statistics['created_roots'] + statistics['created_categories']
-                    )
-
-                    return {
-                        "status": "success",
-                        "message": f"Выполнена синхронизация категорий: {total_operations} операций",
-                        "statistics": statistics
-                    }
-
+                    # Проверяем базовое соединение к БД
+                    # Не проверяем конкретные таблицы - блокировки таблиц это временная ситуация,
+                    # которая не означает что БД недоступна в целом
+                    await cursor.execute("SELECT 1")
+                    result = await cursor.fetchone()
+                    return result[0] == 1 if result else False
         except Exception as e:
-            logger.error(f"Ошибка синхронизации категорий: {str(e)}", exc_info=True)
+            # Логируем timeout/lock ошибки как warning, не как error
+            error_msg = str(e).lower()
+            timeout_indicators = ['timeout', 'lock', 'deadlock', 'blocked', 'превышено', 'блокировк', '1222', '1205']
+            if any(indicator in error_msg for indicator in timeout_indicators):
+                logger.warning(f"Database health check blocked (possible long transaction): {str(e)}")
+            return False
 
-            return {
-                "status": "error",
-                "error": str(e),
-                "statistics": {}
-            }
+    # Совместимость со старым API
+    async def create_pool(self):
+        """Создает пул соединений (для совместимости)"""
+        await self._connect()
+        self._is_connected = True
 
-    async def _sync_root_categories(self, cursor, root_categories: Dict[int, str], statistics: Dict,
-                                    root_id_mapping: Dict):
-        """Синхронизация корневых категорий"""
-        total_roots = len(root_categories)
-        logger.info(f"Обработка {total_roots} родительских категорий")
+    async def close_pool(self):
+        """Закрывает пул соединений (для совместимости)"""
+        await self._disconnect()
+        self._is_connected = False
 
-        for i, (root_id, root_name) in enumerate(root_categories.items(), 1):
-            root_id = int(root_id)
-            # Проверяем существование записи
-            await cursor.execute(f"SELECT id, type_name FROM {self.table} WHERE type_id = ? AND parent_id IS NULL",
-                           (root_id,))
-            existing = await cursor.fetchone()
+    @asynccontextmanager
+    async def get_connection(self, query_timeout: int = 5) -> AsyncGenerator[aioodbc.Connection, None]:
+        """Контекстный менеджер для получения соединения
 
-            if existing:
-                existing_db_id, existing_name = existing
-                root_id_mapping[root_id] = existing_db_id
-
-                # Проверяем, нужно ли обновить имя
-                if existing_name != root_name:
-                    await cursor.execute(f"""
-                        UPDATE {self.table} 
-                        SET type_name = ?, last_updated = GETDATE()
-                        WHERE id = ?
-                    """, (root_name, existing_db_id))
-
-                    statistics['updated_roots'] += 1
-                    statistics['name_changes_roots'] += 1
-                    statistics['renamed_roots'].append({
-                        'id': root_id,
-                        'old_name': existing_name,
-                        'new_name': root_name
-                    })
-                    logger.info(f"Обновили родительскую категорию {root_id}: '{existing_name}' → '{root_name}'")
-                else:
-                    # Обновляем только last_updated
-                    await cursor.execute(f"UPDATE {self.table} SET last_updated = GETDATE() WHERE id = ?", (existing_db_id,))
-                    logger.info(f"Для родительской категории {root_id} - {root_name} обновили только дату last_updated")
-            else:
-                # Создаем новую запись
-                await cursor.execute(f"""
-                    INSERT INTO {self.table} (type_id, type_name, parent_id, carville_cat, last_updated)
-                    VALUES (?, ?, NULL, NULL, GETDATE())
-                """, (root_id, root_name,))
-
-                await cursor.execute("SELECT @@IDENTITY")
-                new_id = (await cursor.fetchone())[0]
-                root_id_mapping[root_id] = new_id
-                statistics['created_roots'] += 1
-                statistics['new_roots'].append({
-                    'id': root_id,
-                    'name': root_name
-                })
-                logger.info(f"Создана родительская категория {root_id} - {root_name} (ID: {new_id})")
-
-            # Логируем прогресс каждые 10 записей или в конце
-            if i % 10 == 0 or i == total_roots:
-                logger.info(f"Обновление родительских категорий: {i}/{total_roots} ({i / total_roots * 100:.1f}%)")
-
-    async def _sync_categories(self, cursor, categories: Dict[int, Dict], root_categories: Dict[int, str],
-                               statistics: Dict, category_id_mapping: Dict, root_id_mapping: Dict):
-        """Синхронизация подкатегорий"""
-        total_categories = len(categories)
-        logger.info(f"Обработка {total_categories} категорий")
-
-        for i, (category_id, category_data) in enumerate(categories.items(), 1):
-            category_id = int(category_id)
-            category_name = category_data['name']
-            parent_root_id = category_data['parent_id']
-
-            # Получаем parent_id из маппинга корневых категорий
-            parent_db_id = root_id_mapping.get(parent_root_id)
-            if not parent_db_id:
-                logger.warning(f"Родительская категория {parent_root_id} не найдена для {category_id}")
-                continue
-
-            # Проверяем существование записи с правильным parent_id
-            await cursor.execute(f"""
-                SELECT id, type_name FROM {self.table} 
-                WHERE type_id = ? AND parent_id = ?
-            """, (category_id, parent_db_id))
-            existing = await cursor.fetchone()
-
-            if existing:
-                existing_db_id, existing_name = existing
-                category_id_mapping[category_id] = existing_db_id
-
-                # Проверяем, нужно ли обновить имя
-                if existing_name != category_name:
-                    await cursor.execute(f"""
-                        UPDATE {self.table} 
-                        SET type_name = ?, last_updated = GETDATE()
-                        WHERE id = ?
-                    """, (category_name, existing_db_id))
-
-                    statistics['updated_categories'] += 1
-                    statistics['name_changes_categories'] += 1
-                    # Получаем имя корневой категории
-                    root_name = root_categories.get(parent_root_id, f"Unknown ({parent_root_id})")
-                    statistics['renamed_categories'].append({
-                        'id': category_id,
-                        'old_name': existing_name,
-                        'new_name': category_name,
-                        'parent_root_id': parent_root_id,
-                        'parent_root_name': root_name
-                    })
-                    logger.info(f"Обновили категорию {category_id}: '{existing_name}' → '{category_name}'")
-                else:
-                    # Обновляем только last_updated
-                    await cursor.execute(f"UPDATE {self.table} SET last_updated = GETDATE() WHERE id = ?", (existing_db_id,))
-                    logger.info(
-                        f"Для категории {category_id} - {category_name} обновили только дату last_updated")
-            else:
-                # Создаем новую запись
-                await cursor.execute(f"""
-                    INSERT INTO {self.table} (type_id, type_name, parent_id, carville_cat, last_updated)
-                    VALUES (?, ?, ?, NULL, GETDATE())
-                """, (category_id, category_name, parent_db_id))
-
-                await cursor.execute("SELECT @@IDENTITY")
-                new_id = (await cursor.fetchone())[0]
-                category_id_mapping[category_id] = new_id
-                statistics['created_categories'] += 1
-                # Получаем имя корневой категории
-                root_name = root_categories.get(parent_root_id, f"Unknown ({parent_root_id})")
-                statistics['new_categories'].append({
-                    'id': category_id,
-                    'name': category_name,
-                    'parent_root_id': parent_root_id,
-                    'parent_root_name': root_name
-                })
-                logger.info(
-                    f"Создали категорию {category_id} - {category_name} (ID: {new_id}, ID родительской: {parent_db_id})")
-
-            # Логируем прогресс каждые 50 записей или в конце
-            if i % 50 == 0 or i == total_categories:
-                logger.info(f"Обновление категорий: {i}/{total_categories} ({i / total_categories * 100:.1f}%)")
-
-    async def get_outdated_records(self) -> Dict[str, Any]:
-        """Получает записи, которые не обновлялись более указанного количества часов"""
+        Args:
+            query_timeout: Таймаут выполнения запроса в секундах (по умолчанию 5 секунд)
+        """
         try:
-            async with aioodbc.connect(dsn=self.connection_string) as conn:
-                async with conn.cursor() as cursor:
-                    # Записи старше указанного количества часов и минут
-                    outdated_hours = settings.OUTDATED_RECORDS_HOURS
-                    outdated_minutes = settings.OUTDATED_RECORDS_MINUTES
-                    cutoff_date = datetime.now() - timedelta(hours=outdated_hours, minutes=outdated_minutes)
-
-                    # Корневые категории (parent_id IS NULL)
-                    await cursor.execute(f"""
-                        SELECT type_id, type_name FROM {self.table} 
-                        WHERE parent_id IS NULL AND last_updated < ?
-                    """, (cutoff_date,))
-                    outdated_roots_data = await cursor.fetchall()
-                    outdated_roots = len(outdated_roots_data)
-
-                    # Подкатегории с полным путем (parent_id ссылается на корневую категорию)
-                    await cursor.execute(f"""
-                        SELECT c.type_id, c.type_name, r.type_id as root_id, r.type_name as root_name
-                        FROM {self.table} c
-                        INNER JOIN {self.table} r ON c.parent_id = r.id
-                        WHERE r.parent_id IS NULL AND c.last_updated < ?
-                    """, cutoff_date)
-                    outdated_categories_data = await cursor.fetchall()
-                    outdated_categories = len(outdated_categories_data)
-
-                    statistics = {
-                        'outdated_roots': outdated_roots,
-                        'outdated_categories': outdated_categories,
-                        'outdated_roots_list': [{
-                            'id': type_id,
-                            'name': type_name
-                        } for type_id, type_name in outdated_roots_data],
-                        'outdated_categories_list': [{
-                            'id': cat_id,
-                            'name': cat_name,
-                            'parent_root_id': root_id,
-                            'parent_root_name': root_name
-                        } for cat_id, cat_name, root_id, root_name in outdated_categories_data],
-                    }
-
-                    # Формируем строку времени для лога
-                    time_str = f"{outdated_hours}h" if outdated_minutes == 0 else f"{outdated_hours}h {outdated_minutes}m"
-                    logger.info(
-                        f"Проверка устаревших записей (>{time_str}, {cutoff_date}): {outdated_roots} родительских, {outdated_categories} категорий")
-
-                    return {
-                        "status": "success",
-                        "statistics": statistics
-                    }
-
+            await self.ensure_connection()
+        except RuntimeError as e:
+            # Circuit breaker открыт
+            logger.warning(f"Database circuit breaker is open: {str(e)}")
+            # Запускаем фоновое переподключение
+            self._schedule_background_reconnect()
+            raise DatabaseError("Database service temporarily unavailable - circuit breaker open")
         except Exception as e:
-            logger.error(f"Ошибка подсчета устаревших записей: {str(e)}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e),
-                "statistics": {}
-            }
+            logger.error(f"Failed to ensure database connection: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            raise DatabaseError(f"Failed to connect to database: {str(e)}")
+
+        try:
+            async with self._pool.acquire() as conn:
+                # Устанавливаем LOCK_TIMEOUT для защиты от длинных блокировок
+                # query_timeout в секундах -> миллисекунды для SQL Server
+                lock_timeout_ms = query_timeout * 1000
+                try:
+                    async with conn.cursor() as cursor:
+                        await cursor.execute(f"SET LOCK_TIMEOUT {lock_timeout_ms}")
+                except Exception as timeout_set_error:
+                    logger.warning(f"Failed to set LOCK_TIMEOUT: {str(timeout_set_error)}")
+
+                yield conn
+        except Exception as e:
+            error_msg = str(e).lower()
+
+            # Проверяем, является ли это timeout/lock ошибкой
+            # SQL Server коды: 1222 - lock timeout, 1205 - deadlock
+            # Проверяем и английские слова, и русские, и коды ошибок
+            timeout_indicators = [
+                'timeout', 'lock', 'deadlock', 'blocked',  # Английские
+                'превышено', 'блокировк', 'ожидания',  # Русские
+                '1222', '1205'  # SQL Server error codes
+            ]
+
+            if any(indicator in error_msg for indicator in timeout_indicators):
+                logger.warning(f"Database query timeout or lock detected: {str(e)}")
+                # Не записываем failure для circuit breaker - это временная проблема
+                # И не запускаем background reconnection
+                raise DatabaseError(
+                    "Database temporarily unavailable - query timeout (possible long-running transaction)")
+
+            logger.error(f"Database connection error: {str(e)}")
+            # Записываем ошибку для circuit breaker только для реальных проблем
+            self._record_failure()
+            # Запускаем фоновое переподключение
+            self._schedule_background_reconnect()
+            raise DatabaseError(f"Database operation failed: {str(e)}")
+

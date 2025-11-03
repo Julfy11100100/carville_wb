@@ -7,6 +7,7 @@ from app.containers import Container
 from app.exceptions.task import TaskAlreadyExistsError, TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
 from app.schemas.product_match import ProductMatchRequest
+from app.schemas.product_update import ProductUpdateRequest
 from app.schemas.task import GetTaskRequest, TaskType
 from app.services.product_match_service import ProductMatchService
 from app.services.task_manager import TaskManager
@@ -224,7 +225,7 @@ async def create_products_collection_task(
 @router.post("/product/update", tags=["products"])
 @inject
 async def create_products_update_task(
-        products: List[dict],
+        request: ProductUpdateRequest,
         background_tasks: BackgroundTasks,
         token: str = Depends(get_wb_token),
         task_manager: TaskManager = Depends(Provide[Container.task_manager]),
@@ -234,7 +235,7 @@ async def create_products_update_task(
     Создаёт асинхронную задачу для обновления товаров.
 
     Args:
-        products: Список товаров для обновления
+        request: Список товаров для обновления
         background_tasks: Фоновые задачи FastAPI
         token: WB API токен из заголовка
         task_manager: Менеджер задач
@@ -247,37 +248,37 @@ async def create_products_update_task(
         HTTPException: При ошибках создания задачи
     """
     try:
-        if not products:
+        if not request:
             raise HTTPException(
                 status_code=400,
                 detail="Список товаров не может быть пустым"
             )
 
-        logger.info(f"Создание задачи обновления товаров: {len(products)} товаров")
+        logger.info(f"Создание задачи обновления товаров: {len(request.products)} товаров")
 
-        # Создаём задачу
-        task = await task_manager.create_task(
-            wb_token=token,
-            task_type=TaskType.UPDATE_PRODUCTS
-        )
-
-        # Запускаем фоновую задачу
-        background_tasks.add_task(
-            wb_client.update_products_background,
-            token,
-            products,
-            task
-        )
-
-        logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
-
-        return {
-            "task_id": task.task_id,
-            "status": task.status.value,
-            "message": "Задача обновления успешно создана",
-            "created_at": task.created_at.isoformat(),
-            "total_items": len(products)
-        }
+        # # Создаём задачу
+        # task = await task_manager.create_task(
+        #     wb_token=token,
+        #     task_type=TaskType.UPDATE_PRODUCTS
+        # )
+        #
+        # # Запускаем фоновую задачу
+        # background_tasks.add_task(
+        #     wb_client.update_products_background,
+        #     token,
+        #     products,
+        #     task
+        # )
+        #
+        # logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
+        #
+        # return {
+        #     "task_id": task.task_id,
+        #     "status": task.status.value,
+        #     "message": "Задача обновления успешно создана",
+        #     "created_at": task.created_at.isoformat(),
+        #     "total_items": len(products)
+        # }
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
@@ -506,7 +507,7 @@ async def match_products(
 
     except Exception as e:
 
-        logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
+        logger.error(f"Неожиданная ошибка при сопоставлении продуктов: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,

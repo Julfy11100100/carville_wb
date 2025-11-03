@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import wildberries
+from app.api import categories
+from app.api.categories import router as categories_router
 from app.api.default import router as default_router
 from app.api.wildberries import router as wb_router
 from app.containers import Container
@@ -26,7 +28,7 @@ def init_dependency_injector() -> Container:
     container.config.from_pydantic(settings=settings, required=True)
 
     container.wire(
-        modules=[wildberries]
+        modules=[wildberries, categories]
     )
 
     return container
@@ -83,6 +85,7 @@ app.add_middleware(
 
 app.include_router(default_router)
 app.include_router(wb_router)
+app.include_router(categories_router)
 
 
 @app.middleware("http")

@@ -43,7 +43,7 @@ class ProductMatchRequest(BaseModel):
 
 class ProductMatchResponse(BaseModel):
     """Ответ с информацией о сопоставленном товаре"""
-    offer_id: Union[str, int] = Field(..., description="ID товара в системе продавца (SKU)")
+    nm_id: Union[str, int] = Field(..., description="ID товара в системе продавца (SKU)")
     identifier_value: Union[str, int] = Field(..., description="Значение идентификатора для сопоставления")
     carville_value: Union[str, int, list[int]] = Field(..., description="Значение поля в базе данных Carville")
     wb_value: Union[str, int] = Field(..., description="Значение поля в")
