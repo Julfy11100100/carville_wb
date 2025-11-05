@@ -1,13 +1,13 @@
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Dict, Any, List
 
 from app.exceptions.sql_database import DatabaseError
 from app.schemas.wb_types import WbTypesTreeResponse, CategoryResponse, WbTypeResponse
 from app.services.sql_repository import SQLDatabaseRepository
 from app.utils.logging import get_logger
-from config import settings
+from config import settings, project_root
 
 logger = get_logger()
 
@@ -23,7 +23,17 @@ class SqlCategoryService:
         self.sql = sql_repository
 
         self.table = table
-        self.schemes_path = Path("data/static/categories") / categories_file
+
+        self.schemes_path = str(f"{project_root}/app/data/static/categories/{categories_file}")
+        self._carville_cat_root = None
+        self._carville_cat_id = None
+        self.get_carville_categories_from_file()
+
+    def get_carville_categories_from_file(self):
+        with open(self.schemes_path, 'r', encoding='utf-8') as f:
+            file_result = json.load(f)
+        self._carville_cat_root = file_result["root_categories"]
+        self._carville_cat_id = file_result["categories"]
 
     async def sync_categories_tree_to_db(self, tree_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -174,6 +184,7 @@ class SqlCategoryService:
             category_id = int(category_id)
             category_name = category_data['name']
             parent_root_id = category_data['parent_id']
+            carville_cat = 1 if parent_root_id in self._carville_cat_root or category_id in self._carville_cat_id else None
 
             # Получаем parent_id из маппинга корневых категорий
             parent_db_id = root_id_mapping.get(parent_root_id)
@@ -183,22 +194,22 @@ class SqlCategoryService:
 
             # Проверяем существование записи с правильным parent_id
             await cursor.execute(f"""
-                SELECT id, type_name FROM {self.table} 
+                SELECT id, type_name, carville_cat FROM {self.table} 
                 WHERE type_id = ? AND parent_id = ?
             """, (category_id, parent_db_id))
             existing = await cursor.fetchone()
 
             if existing:
-                existing_db_id, existing_name = existing
+                existing_db_id, existing_name, existing_carville_cat = existing
                 category_id_mapping[category_id] = existing_db_id
 
-                # Проверяем, нужно ли обновить имя
-                if existing_name != category_name:
+                # Проверяем, нужно ли обновить имя или carville_cat
+                if existing_name != category_name or carville_cat != existing_carville_cat:
                     await cursor.execute(f"""
                         UPDATE {self.table} 
-                        SET type_name = ?, last_updated = GETDATE()
+                        SET type_name = ?, carville_cat = ?, last_updated = GETDATE()
                         WHERE id = ?
-                    """, (category_name, existing_db_id))
+                    """, (category_name, carville_cat, existing_db_id))
 
                     statistics['updated_categories'] += 1
                     statistics['name_changes_categories'] += 1
@@ -222,8 +233,8 @@ class SqlCategoryService:
                 # Создаем новую запись
                 await cursor.execute(f"""
                     INSERT INTO {self.table} (type_id, type_name, parent_id, carville_cat, last_updated)
-                    VALUES (?, ?, ?, NULL, GETDATE())
-                """, (category_id, category_name, parent_db_id))
+                    VALUES (?, ?, ?, ?, GETDATE())
+                """, (category_id, category_name, parent_db_id, carville_cat))
 
                 await cursor.execute("SELECT @@IDENTITY")
                 new_id = (await cursor.fetchone())[0]

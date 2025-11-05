@@ -50,20 +50,5 @@ async def insert_categories():
         await sql_repository.close_pool()
 
 
-async def check_logic():
-    sql_repository = SQLDatabaseRepository()
-    sql_category_service = SqlCategoryService(sql_repository)
-    try:
-        result = await sql_category_service.get_types_tree()
-        print(f"РЕЗУЛЬТАТ")
-        from pprint import pprint
-        pprint(result)
-    except Exception as e:
-        print(f"Ошибка: {e}")
-    finally:
-        await sql_repository.close_pool()
-
-
 if __name__ == "__main__":
-    # asyncio.run(insert_categories())
-    asyncio.run(check_logic())
+    asyncio.run(insert_categories())
