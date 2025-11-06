@@ -198,7 +198,7 @@ class ElasticsearchService(ReconnectableService):
                 action_meta = {
                     "index": {
                         "_index": index_name,
-                        "_id": product.get("nmId")  # Используем nmId как ID документа
+                        "_id": product.get("nmID")  # Используем nmId как ID документа
                     }
                 }
                 actions.append(action_meta)
@@ -419,3 +419,209 @@ class ElasticsearchService(ReconnectableService):
                 must_clauses.append({"term": {field: value}})
 
         return {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
+
+    async def find_products_with_different_value(
+            self,
+            token: str,
+            field: str,
+            expected_values: Dict[int, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Найти полные карточки товаров по nm_id, у которых значение поля отличается от ожидаемого.
+
+        Args:
+            token: Хешированный токен клиента
+            field: Поле для проверки
+            expected_values: Словарь {nm_id: expected_value}
+
+        Returns:
+            Список полных карточек товаров с отличающимся значением поля
+        """
+        try:
+            await self._ensure_valid_client()
+        except RuntimeError as e:
+            logger.warning(f"Elasticsearch недоступен для поиска клиента {token}: {str(e)}")
+            self._schedule_background_reconnect()
+            return []
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return []
+
+        try:
+            index_name = self._get_index_name(token)
+
+            # Проверяем существует ли индекс
+            exists = await self.client.indices.exists(index=index_name)
+            if not exists:
+                logger.warning(f"Индекс {index_name} не существует")
+                return []
+
+            nm_ids = list(expected_values.keys())
+
+            if not nm_ids:
+                return []
+
+            # Строим запрос для поиска товаров по nmID
+            query = {
+                "terms": {
+                    "nmID": nm_ids
+                }
+            }
+
+            # Выполняем поиск
+            response = await self.client.search(
+                index=index_name,
+                body={
+                    "query": query,
+                    "size": len(nm_ids)
+                }
+            )
+
+            # Извлекаем результаты и фильтруем только товары с отличающимся значением
+            products = []
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                nm_id = source.get("nmID")
+                current_value = source.get(field)
+                expected_value = expected_values.get(nm_id)
+
+                # Сравниваем текущее значение с ожидаемым
+                if current_value != expected_value:
+                    products.append(source)  # Добавляем полную карточку
+
+                    logger.debug(
+                        f"Найдено отличие для nmID {nm_id}: "
+                        f"поле '{field}' = {current_value} (ожидалось {expected_value})"
+                    )
+
+            logger.info(
+                f"Найдено {len(products)} товаров с отличающимся значением поля '{field}' "
+                f"из {len(nm_ids)} проверенных для клиента {token}"
+            )
+
+            return products
+
+        except Exception as e:
+            logger.error(f"Не удалось найти товары для клиента {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return []
+
+    async def bulk_update_products(
+            self,
+            token: str,
+            field: str,
+            updates: Dict[int, Any]  # {nm_id: new_value, ...}
+    ) -> Dict[str, Any]:
+        """
+        Массовое обновление значений поля для списка товаров
+
+        Args:
+            token: Токен клиента
+            field: Поле для обновления
+            updates: Словарь {nm_id: new_value}
+
+        Returns:
+            Dict с результатами обновления
+        """
+        try:
+            await self._ensure_valid_client()
+        except RuntimeError as e:
+            logger.warning(f"Elasticsearch недоступен для обновления клиента {token}: {str(e)}")
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": "Сервис Elasticsearch временно недоступен",
+                "updated": 0,
+                "failed": 0
+            }
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": f"Ошибка подключения: {str(e)}",
+                "updated": 0,
+                "failed": 0
+            }
+
+        try:
+            from elasticsearch.helpers import async_streaming_bulk
+
+            index_name = self._get_index_name(token)
+
+            # Проверяем существует ли индекс
+            exists = await self.client.indices.exists(index=index_name)
+            if not exists:
+                return {
+                    "status": "error",
+                    "error": f"Данные для клиента {token} не найдены. Пожалуйста, сначала запустите синхронизацию данных.",
+                    "updated": 0,
+                    "failed": 0
+                }
+
+            # Подготавливаем действия для bulk update
+            async def generate_actions():
+                for nm_id, value in updates.items():
+                    yield {
+                        "_op_type": "update",
+                        "_index": index_name,
+                        "_id": str(nm_id),
+                        "doc": {
+                            field: value
+                        }
+                    }
+
+            # Выполняем bulk update
+            success_count = 0
+            failed_count = 0
+            errors = []
+
+            async for ok, result in async_streaming_bulk(
+                    client=self.client,
+                    actions=generate_actions(),
+                    chunk_size=500,
+                    raise_on_error=False
+            ):
+                if ok:
+                    success_count += 1
+                else:
+                    failed_count += 1
+                    action, result_data = result.popitem()
+                    error_info = {
+                        "nm_id": result_data.get("_id"),
+                        "error": result_data.get("error", {}).get("reason", "Unknown error")
+                    }
+                    errors.append(error_info)
+                    logger.warning(f"Не удалось обновить товар {error_info['nm_id']}: {error_info['error']}")
+
+            logger.info(
+                f"Обновление завершено для клиента {token}: "
+                f"успешно={success_count}, ошибок={failed_count}"
+            )
+
+            # Принудительно обновляем индекс для немедленной доступности данных
+            await self.client.indices.refresh(index=index_name)
+
+            return {
+                "status": "success" if failed_count == 0 else "partial_success",
+                "updated": success_count,
+                "failed": failed_count,
+                "errors": errors if errors else None,
+                "field": field,
+                "total_requested": len(updates)
+            }
+
+        except Exception as e:
+            logger.error(f"Не удалось обновить товары для клиента {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": str(e),
+                "updated": 0,
+                "failed": len(updates)
+            }

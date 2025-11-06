@@ -130,14 +130,6 @@ class WildberriesAPI:
             async with self._retry_client.request(
                     method, url, headers=headers, **kwargs
             ) as response:
-                # Обработка различных статус-кодов
-                if response.status == 429:
-                    retry_after = response.headers.get("Retry-After")
-                    logger.warning(f"Превышен лимит запросов (429) для {endpoint}, retry-after={retry_after}s")
-                    raise WildberriesRateLimitError(
-                        "Превышен лимит запросов",
-                        status_code=response.status
-                    )
 
                 if response.status >= 400:
                     error_detail = f"Ошибка WB API: {response.status}"

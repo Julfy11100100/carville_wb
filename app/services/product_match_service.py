@@ -14,7 +14,7 @@ class ProductMatchService:
     """Сервис для сопоставления товаров с товарами в БД"""
     COMPARISON_FIELDS_MAP = {
         "type_id": "type_id",
-        "subjectName": "ozon_name"
+        "title": "ozon_name"
     }  # процедура в бд ожидает другие имена
 
     def __init__(self, elasticsearch_service: ElasticsearchService, database_service: SQLDatabaseRepository):

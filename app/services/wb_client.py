@@ -130,38 +130,133 @@ class WildberriesClient:
     async def update_products_background(
             self,
             token: str,
-            products: List[Dict[str, Any]],
+            field: str,
+            updates: Dict[int, Any],
             task_info: TaskInfo
     ):
-        """Фоновая задача для обновления карточек товаров с гарантированной проверкой."""
+        """
+        Фоновая задача для обновления карточек товаров с гарантированной проверкой.
+        1. Извлекает карточки из Elasticsearch пакетами по 1000 (только с отличающимся значением поля)
+        2. Обновляет поле на новое значение
+        3. Сразу отправляет каждый пакет на обновление в WB
+        4. Проверяет результаты с поллингом
+        5. Обновляет только успешно обновленные карточки в Elasticsearch
+
+        Args:
+            token: API токен
+            field: Поле для обновления
+            updates: Словарь {nm_id: new_value}
+            task_info: Информация о задаче
+        """
         try:
             task_info.status = TaskStatus.RUNNING
-            task_info.total_items = len(products)
+            task_info.total_items = len(updates)
 
-            nm_ids = [int(p.get("nmID")) for p in products if p.get("nmID")]
+            nm_ids = list(updates.keys())
+            hashed_token = hash_token(token)
 
             task_info.metadata = {
                 "nm_ids": nm_ids,
+                "update_field": field,
                 "update_started_at": datetime.now().isoformat(),
                 "update_completed_at": None,
                 "check_results": None,
                 "polling_attempts": 0,
                 "final_error_count": None,
-                "final_success_count": None
+                "final_success_count": None,
+                "elasticsearch_update_count": 0,
+                "batches_sent": 0,
+                "skipped_without_changes": 0
             }
 
             await self.task_manager.save_task(task_info)
 
-            logger.info(f"Начало обновления товаров: {task_info.task_id}, всего={len(products)}")
+            logger.info(
+                f"Начало обновления товаров: {task_info.task_id}, "
+                f"всего={len(updates)}, поле={field}"
+            )
 
-            # 1. Отправляем товары в WB
-            await self.api.update_products_chunked(token, products, delay_between_chunks=6)
+            # 1. Извлекаем и отправляем пакетами по 3000
+            batch_size = 3000
+            batches_sent = 0
+            skipped_count = 0
 
-            # 2. Сохраняем дату отправки
-            task_info.metadata["update_sent_at"] = datetime.now().isoformat()
-            await self.task_manager.save_task(task_info)
+            for i in range(0, len(nm_ids), batch_size):
+                batch_nm_ids = nm_ids[i:i + batch_size]
 
-            # 3. Проверяем результаты с поллингом
+                # Создаем словарь ожидаемых значений для этого батча
+                batch_updates = {nm_id: updates[nm_id] for nm_id in batch_nm_ids}
+
+                logger.info(
+                    f"Загрузка пакета {batches_sent + 1}: nmID {batch_nm_ids[0]}-{batch_nm_ids[-1]} "
+                    f"({len(batch_nm_ids)} товаров)"
+                )
+
+                # Загружаем только товары с отличающимся значением поля
+                batch_products = await self.elasticsearch_service.find_products_with_different_value(
+                    token=hashed_token,
+                    field=field,
+                    expected_values=batch_updates
+                )
+
+                # Учитываем пропущенные товары (без изменений)
+                batch_skipped = len(batch_nm_ids) - len(batch_products)
+                if batch_skipped > 0:
+                    skipped_count += batch_skipped
+                    logger.info(
+                        f"Пакет {batches_sent + 1}: {batch_skipped} товаров уже имеют нужное значение, пропущены"
+                    )
+
+                if not batch_products:
+                    logger.warning(
+                        f"Пакет {batches_sent + 1} пуст (все товары имеют актуальное значение), пропускаем отправку"
+                    )
+                    await asyncio.sleep(0.1)
+                    continue
+
+                # Обновляем поле на новое значение в каждой карточке
+                for product in batch_products:
+                    nm_id = product.get("nmID")
+                    if nm_id in batch_updates:
+                        old_value = product.get(field)
+                        new_value = batch_updates[nm_id]
+                        product[field] = new_value
+
+                        logger.debug(
+                            f"Обновлено поле '{field}' для nmID {nm_id}: "
+                            f"{old_value} -> {new_value}"
+                        )
+
+                logger.info(
+                    f"Отправка пакета {batches_sent + 1} в WB: {len(batch_products)} товаров "
+                    f"(из {len(batch_nm_ids)} в пакете)"
+                )
+
+                # Отправляем пакет в WB
+                await self.api.update_products_chunked(
+                    token,
+                    batch_products,
+                )
+
+                batches_sent += 1
+                task_info.metadata["batches_sent"] = batches_sent
+                task_info.metadata["update_sent_at"] = datetime.now().isoformat()
+                task_info.metadata["skipped_without_changes"] = skipped_count
+                await self.task_manager.save_task(task_info)
+
+                logger.info(
+                    f"Пакет {batches_sent} успешно отправлен: {len(batch_products)} товаров"
+                )
+
+                # Небольшая задержка между пакетами для избежания перегрузки
+                await asyncio.sleep(1)
+
+            logger.info(
+                f"Все {batches_sent} пакетов отправлены в WB: {task_info.task_id}, "
+                f"пропущено без изменений={skipped_count}"
+            )
+
+            # 2. Проверяем результаты с поллингом
             result = await self._check_update_results_with_polling(
                 token=token,
                 task_info=task_info,
@@ -170,23 +265,92 @@ class WildberriesClient:
                 retry_delay=15
             )
 
-            # 4. Сохраняем финальные результаты
+            # Сохраняем финальные результаты
             task_info.metadata["check_results"] = result
             task_info.metadata["update_completed_at"] = datetime.now().isoformat()
             task_info.processed_items = result.get("success_count", 0)
 
-            if result.get("error_count", 0) > 0:
+            error_nm_ids = set(result.get("error_nm_ids", []))
+            success_nm_ids = set(nm_ids) - error_nm_ids
+
+            logger.info(
+                f"Результаты проверки: {task_info.task_id}, "
+                f"успешно={len(success_nm_ids)}, ошибок={len(error_nm_ids)}, "
+                f"попыток={result.get('polling_attempts', 0)}"
+            )
+
+            # 3. Обновляем в Elasticsearch только успешно обновленные карточки
+            if success_nm_ids:
+                # Создаем словарь успешных обновлений
+                success_updates = {
+                    nm_id: updates[nm_id]
+                    for nm_id in success_nm_ids
+                }
+
+                # Отправляем пакетами по 1000 на обновление в Elasticsearch
+                es_batch_size = 1000
+                es_updated_total = 0
+                es_failed_total = 0
+
+                success_nm_ids_list = list(success_nm_ids)
+                for es_i in range(0, len(success_nm_ids_list), es_batch_size):
+                    es_batch_nm_ids = success_nm_ids_list[es_i:es_i + es_batch_size]
+                    es_batch_updates = {
+                        nm_id: success_updates[nm_id]
+                        for nm_id in es_batch_nm_ids
+                    }
+
+                    elasticsearch_result = await self.elasticsearch_service.bulk_update_products(
+                        token=hashed_token,
+                        field=field,
+                        updates=es_batch_updates
+                    )
+
+                    es_updated_total += elasticsearch_result.get("updated", 0)
+                    es_failed_total += elasticsearch_result.get("failed", 0)
+
+                    logger.info(
+                        f"Elasticsearch пакет {es_i // es_batch_size + 1}: "
+                        f"обновлено={elasticsearch_result.get('updated', 0)}, "
+                        f"ошибок={elasticsearch_result.get('failed', 0)}"
+                    )
+
+                    await asyncio.sleep(0.1)
+
+                task_info.metadata["elasticsearch_update_count"] = es_updated_total
+                task_info.metadata["elasticsearch_update_errors"] = es_failed_total
+
+                logger.info(
+                    f"Elasticsearch обновлены: {task_info.task_id}, "
+                    f"успешно={es_updated_total}, ошибок={es_failed_total}"
+                )
+
+            # 4. Определяем финальный статус
+            if error_nm_ids:
                 task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
+                task_info.metadata["final_error_count"] = len(error_nm_ids)
+                task_info.metadata["final_success_count"] = len(success_nm_ids)
+                task_info.metadata["error_details"] = result.get("error_details", {})
+
                 logger.warning(
                     f"Обновление {task_info.task_id} завершено с ошибками: "
-                    f"успешно={result['success_count']}, ошибок={result['error_count']}, "
-                    f"попыток={result.get('polling_attempts', 0)}"
+                    f"успешно={len(success_nm_ids)}, ошибок={len(error_nm_ids)}, "
+                    f"попыток={result.get('polling_attempts', 0)}, "
+                    f"пакетов_отправлено={batches_sent}, "
+                    f"пропущено_без_изменений={skipped_count}, "
+                    f"elasticsearch_обновлено={task_info.metadata['elasticsearch_update_count']}"
                 )
             else:
                 task_info.status = TaskStatus.COMPLETED
+                task_info.metadata["final_error_count"] = 0
+                task_info.metadata["final_success_count"] = len(success_nm_ids)
+
                 logger.info(
                     f"Обновление {task_info.task_id} успешно: "
-                    f"успешно={result['success_count']}, попыток={result.get('polling_attempts', 0)}"
+                    f"успешно={len(success_nm_ids)}, попыток={result.get('polling_attempts', 0)}, "
+                    f"пакетов_отправлено={batches_sent}, "
+                    f"пропущено_без_изменений={skipped_count}, "
+                    f"elasticsearch_обновлено={task_info.metadata['elasticsearch_update_count']}"
                 )
 
         except Exception as e:
@@ -194,9 +358,13 @@ class WildberriesClient:
             task_info.completed_at = datetime.now()
             task_info.error = str(e)
 
-            logger.error(f"Ошибка при обновлении товаров {task_info.task_id}: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при обновлении товаров {task_info.task_id}: {e}",
+                exc_info=True
+            )
 
         finally:
+            task_info.completed_at = datetime.now()
             await self.task_manager.save_task(task_info)
 
     async def _check_update_results_with_polling(
@@ -376,78 +544,3 @@ class WildberriesClient:
             "error_details": error_details,
             "error_batches": relevant_errors
         }
-
-    async def check_update_results(
-            self,
-            token: str,
-            task_info: TaskInfo
-    ) -> Dict[str, Any]:
-        """
-        Проверяет результаты обновления товаров через cards/error/list.
-        Сохраняет результаты в метаданные задачи.
-
-        Args:
-            token: API токен
-            task_info: Информация о задаче обновления
-
-        Returns:
-            Словарь с статистикой обновления
-        """
-        try:
-            metadata = task_info.metadata or {}
-            nm_ids = set(metadata.get("nm_ids", []))
-            total_products = task_info.total_items or 0
-
-            if not nm_ids:
-                return {
-                    "checked": False,
-                    "reason": "Нет nmID в метаданных задачи"
-                }
-
-            logger.info(f"Проверка результатов обновления: {task_info.task_id}, nmID={len(nm_ids)}")
-
-            all_errors = await self.api.get_all_errors_for_update(token)
-
-            stats = self._calculate_error_statistics(
-                all_errors,
-                nm_ids,
-                total_products
-            )
-
-            success_rate_pct = stats['success_rate'] * 100
-            logger.info(
-                f"Результаты проверки {task_info.task_id}: "
-                f"успешно={stats['success_count']}, ошибок={stats['error_count']}, "
-                f"процент={success_rate_pct:.1f}%"
-            )
-
-            error_nm_ids_list = list(stats["error_nm_ids"])
-            error_details_serializable = {
-                str(nm_id): errors for nm_id, errors in stats["error_details"].items()
-            }
-
-            check_results = {
-                "checked": True,
-                "success_count": stats["success_count"],
-                "error_count": stats["error_count"],
-                "success_rate": stats["success_rate"],
-                "error_nm_ids": error_nm_ids_list,
-                "error_details": error_details_serializable,
-                "error_batches_count": len(stats["error_batches"])
-            }
-
-            task_info.metadata["error_statistics"] = check_results
-
-            return check_results
-
-        except Exception as e:
-            logger.error(f"Ошибка при проверке результатов {task_info.task_id}: {e}", exc_info=True)
-
-            error_result = {
-                "checked": False,
-                "reason": f"Ошибка при проверке результатов: {e}"
-            }
-
-            task_info.metadata["error_statistics"] = error_result
-
-            return error_result

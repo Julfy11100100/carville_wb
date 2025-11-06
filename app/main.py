@@ -71,7 +71,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description=settings.DESCRIPTION,
-    lifespan=lifespan
+    lifespan=lifespan,
+    root_path=settings.ROOT_PATH
 )
 
 # CORS middleware

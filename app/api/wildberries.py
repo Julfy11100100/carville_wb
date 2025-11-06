@@ -235,7 +235,7 @@ async def create_products_update_task(
     Создаёт асинхронную задачу для обновления товаров.
 
     Args:
-        request: Список товаров для обновления
+        request: ProductUpdateRequest с полем update_field и списком товаров
         background_tasks: Фоновые задачи FastAPI
         token: WB API токен из заголовка
         task_manager: Менеджер задач
@@ -248,37 +248,54 @@ async def create_products_update_task(
         HTTPException: При ошибках создания задачи
     """
     try:
-        if not request:
+        if not request or not request.products:
             raise HTTPException(
                 status_code=400,
                 detail="Список товаров не может быть пустым"
             )
 
-        logger.info(f"Создание задачи обновления товаров: {len(request.products)} товаров")
+        if not request.update_field:
+            raise HTTPException(
+                status_code=400,
+                detail="Поле для обновления не может быть пустым"
+            )
 
-        # # Создаём задачу
-        # task = await task_manager.create_task(
-        #     wb_token=token,
-        #     task_type=TaskType.UPDATE_PRODUCTS
-        # )
-        #
-        # # Запускаем фоновую задачу
-        # background_tasks.add_task(
-        #     wb_client.update_products_background,
-        #     token,
-        #     products,
-        #     task
-        # )
-        #
-        # logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
-        #
-        # return {
-        #     "task_id": task.task_id,
-        #     "status": task.status.value,
-        #     "message": "Задача обновления успешно создана",
-        #     "created_at": task.created_at.isoformat(),
-        #     "total_items": len(products)
-        # }
+        logger.info(
+            f"Создание задачи обновления товаров: {len(request.products)} товаров, "
+            f"поле={request.update_field}"
+        )
+
+        # Создаём словарь обновлений {nm_id: new_value, ...}
+        updates = {int(item.nm_id): item.value for item in request.products}
+
+        # Создаём задачу
+        task = await task_manager.create_task(
+            wb_token=token,
+            task_type=TaskType.UPDATE_PRODUCTS
+        )
+
+        # Запускаем фоновую задачу с корректными параметрами
+        background_tasks.add_task(
+            wb_client.update_products_background,
+            token,
+            request.update_field,
+            updates,
+            task
+        )
+
+        logger.info(
+            f"Задача обновления товаров успешно создана: {task.task_id}, "
+            f"товаров={len(updates)}, поле={request.update_field}"
+        )
+
+        return {
+            "task_id": task.task_id,
+            "status": task.status.value,
+            "message": "Задача обновления успешно создана",
+            "created_at": task.created_at.isoformat(),
+            "total_items": len(updates),
+            "update_field": request.update_field
+        }
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
@@ -286,6 +303,14 @@ async def create_products_update_task(
         raise HTTPException(
             status_code=503,
             detail="Сервис базы данных недоступен"
+        )
+
+    except ValueError as e:
+        logger.error(f"Ошибка валидации данных: {e}", exc_info=True)
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ошибка в данных запроса: {str(e)}"
         )
 
     except Exception as e:
