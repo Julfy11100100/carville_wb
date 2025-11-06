@@ -1,7 +1,7 @@
 services:
-  mongodb:
+  wb_mongodb:
     image: mongo:7.0
-    container_name: mongodb
+    container_name: wb_mongodb
     restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
@@ -13,7 +13,7 @@ services:
     ports:
       - "${MONGO_PORT}:27017"
     networks:
-      - marketplace_network
+      - ozondvizhcom_marketplace_network
     logging:
       options:
         max-size: "10m"
@@ -37,18 +37,18 @@ services:
     ports:
       - "${PORT}:${PORT}"
     networks:
-      - marketplace_network
+      - ozondvizhcom_marketplace_network
     logging:
       options:
         max-size: "10m"
         max-file: "1"
     depends_on:
-      mongodb:
+      wb_mongodb:
         condition: service_healthy
 
 volumes:
   mongodb_data:
 
 networks:
-  marketplace_network:
-    driver: bridge
+  ozondvizhcom_marketplace_network:
+    external: true
