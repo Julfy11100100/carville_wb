@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 from pydantic_settings import BaseSettings
 
@@ -14,7 +15,7 @@ class Settings(BaseSettings):
     # Настройка FastApi
     APP_NAME: str = "Carville WB API Service"
     DESCRIPTION: str = "Сервис для работы с WB API и карточками товаров"
-    ROOT_PATH: str = "wb"
+    ROOT_PATH: Optional[str] = None
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -39,8 +40,8 @@ class Settings(BaseSettings):
     WB_TYPES_MAX_AGE_HOURS: int = 24
 
     # WB API настройки
-    WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
-    # WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

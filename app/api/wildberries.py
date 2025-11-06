@@ -1,5 +1,3 @@
-from typing import List
-
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
 
@@ -25,13 +23,7 @@ def get_wb_token(x_wb_token: str = Header(..., description="WB API токен"))
     Зависимость для получения WB API токена из заголовка запроса
 
     Args:
-        x_wb_token: WB API токен из заголовка
-
-    Returns:
-        Валидный токен
-
-    Raises:
-        HTTPException: Если токен отсутствует
+        x_wb_token: WB API токен из заголовка X-WB-Token
     """
     if not x_wb_token:
         logger.warning("Токен WB API отсутствует в запросе")
@@ -49,13 +41,7 @@ async def check_token(token: str = Depends(get_wb_token)):
     Проверяет валидность WB API токена
 
     Args:
-        token: WB API токен из заголовка
-
-    Returns:
-        Данные о валидности токена
-
-    Raises:
-        HTTPException: Если токен невалиден
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         token_data = is_valid_token(token)
@@ -89,14 +75,7 @@ async def get_product(
     Получает один товар для тестирования API
 
     Args:
-        token: WB API токен из заголовка
-        wb_client: Клиент для работы с WB
-
-    Returns:
-        Данные одного товара
-
-    Raises:
-        HTTPException: При ошибках WB API
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         logger.info("Запрос примера товара")
@@ -141,16 +120,7 @@ async def create_products_collection_task(
     Результат сохраняется в файл.
 
     Args:
-        background_tasks: Фоновые задачи FastAPI
-        token: WB API токен из заголовка
-        task_manager: Менеджер задач
-        wb_client: Клиент для работы с WB
-
-    Returns:
-        Информация о созданной задаче
-
-    Raises:
-        HTTPException: При ошибках создания задачи
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         logger.info("Проверка наличия активной задачи сбора")
@@ -235,17 +205,8 @@ async def create_products_update_task(
     Создаёт асинхронную задачу для обновления товаров.
 
     Args:
-        request: ProductUpdateRequest с полем update_field и списком товаров
-        background_tasks: Фоновые задачи FastAPI
-        token: WB API токен из заголовка
-        task_manager: Менеджер задач
-        wb_client: Клиент для работы с WB
-
-    Returns:
-        Информация о созданной задаче
-
-    Raises:
-        HTTPException: При ошибках создания задачи
+        request: Запрос с полем update_field (имя поля для обновления) и списком товаров с nm_id и новыми значениями
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         if not request or not request.products:
@@ -333,15 +294,8 @@ async def get_task_status(
     Получает статус конкретной задачи по её ID
 
     Args:
-        task_id: ID задачи
-        token: WB API токен из заголовка (для авторизации)
-        task_manager: Менеджер задач
-
-    Returns:
-        Детальная информация о задаче
-
-    Raises:
-        HTTPException: Если задача не найдена или ошибка БД
+        task_id: ID задачи для получения информации
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         logger.debug(f"Получение статуса задачи: {task_id}")
@@ -405,15 +359,8 @@ async def search_tasks(
     Получает список задач по токену с фильтрацией
 
     Args:
-        filters: Фильтры для поиска задач
-        token: WB API токен из заголовка
-        task_manager: Менеджер задач
-
-    Returns:
-        Список задач, соответствующих фильтрам
-
-    Raises:
-        HTTPException: При ошибке БД
+        filters: Фильтры для поиска задач (task_id, task_type, status)
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         task_type = filters.task_type.value if filters.task_type else None
@@ -475,16 +422,11 @@ async def match_products(
         product_match_service: ProductMatchService = Depends(Provide[Container.product_match_service])
 ):
     """
-    Сопостовляем товары WB с товарами из БД
+    Сопостовляет товары WB с товарами из БД
 
     Args:
-        request: ProductMatchRequest
-        token: WB API токен из заголовка
-        product_match_service: сервис мэтча товаров
-
-    Returns:
-        ProductMatchResponse - те же данные что были отправлены в запросе + список сматченных товаров
-
+        request: Запрос с полями wb_match_field (поле WB для матча), carville_match_field (поле БД), category_id (ID категории), comparison_field (поле для сравнения), brand (опционально фильтр по бренду)
+        token: WB API токен из заголовка X-WB-Token
     """
     try:
         result = await product_match_service.match_products(
@@ -533,81 +475,6 @@ async def match_products(
     except Exception as e:
 
         logger.error(f"Неожиданная ошибка при сопоставлении продуктов: {e}", exc_info=True)
-
-        raise HTTPException(
-            status_code=500,
-            detail="Внутренняя ошибка сервера"
-        )
-
-
-@router.post("/product/update_basic", tags=["products"])
-@inject
-async def create_products_update_task_basic(
-        products: List[dict],
-        background_tasks: BackgroundTasks,
-        token: str = Depends(get_wb_token),
-        task_manager: TaskManager = Depends(Provide[Container.task_manager]),
-        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
-):
-    """
-    Создаёт асинхронную задачу для обновления товаров.
-
-    Args:
-        products: Список товаров для обновления
-        background_tasks: Фоновые задачи FastAPI
-        token: WB API токен из заголовка
-        task_manager: Менеджер задач
-        wb_client: Клиент для работы с WB
-
-    Returns:
-        Информация о созданной задаче
-
-    Raises:
-        HTTPException: При ошибках создания задачи
-    """
-    try:
-        if not products:
-            raise HTTPException(
-                status_code=400,
-                detail="Список товаров не может быть пустым"
-            )
-
-        logger.info(f"Создание задачи обновления товаров: {len(products)} товаров")
-
-        # Создаём задачу
-        task = await task_manager.create_task(
-            wb_token=token,
-            task_type=TaskType.UPDATE_PRODUCTS
-        )
-
-        # Запускаем фоновую задачу
-        background_tasks.add_task(
-            wb_client.update_products_background,
-            token,
-            products,
-            task
-        )
-
-        logger.info(f"Задача обновления товаров успешно создана: {task.task_id}")
-
-        return {
-            "task_id": task.task_id,
-            "status": task.status.value,
-            "message": "Задача обновления успешно создана",
-            "created_at": task.created_at.isoformat(),
-            "total_items": len(products)
-        }
-
-    except TaskDatabaseError as e:
-        logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
-
-        raise HTTPException(
-            status_code=503,
-            detail="Сервис базы данных недоступен"
-        )
-
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при создании задачи обновления: {e}", exc_info=True)
 
         raise HTTPException(
             status_code=500,
