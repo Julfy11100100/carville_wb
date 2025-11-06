@@ -5,6 +5,7 @@ from elasticsearch import AsyncElasticsearch
 
 from app.services.base_reconnectable import ReconnectableService
 from app.utils.logging import get_logger
+from config import settings
 
 logger = get_logger()
 
@@ -15,7 +16,7 @@ class ElasticsearchService(ReconnectableService):
     def __init__(self):
         super().__init__("Elasticsearch")
         self.client: Optional[AsyncElasticsearch] = None
-        self._hosts = ["http://localhost:9200"]
+        self._hosts = [settings.ELASTICSEARCH_HOST]
         self._timeout = 120
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
 

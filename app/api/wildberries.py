@@ -126,7 +126,10 @@ async def create_products_collection_task(
         logger.info("Проверка наличия активной задачи сбора")
 
         # Проверяем, есть ли уже активная задача для этого токена
-        active_task = await task_manager.get_active_task_by_token(token)
+        active_task = await task_manager.get_active_task_by_token(
+            wb_token=token,
+            task_type=TaskType.COLLECT_PRODUCTS
+        )
         if active_task:
             logger.info(
                 f"Активная задача уже существует: {active_task.task_id}, "
@@ -209,6 +212,26 @@ async def create_products_update_task(
         token: WB API токен из заголовка X-WB-Token
     """
     try:
+        logger.info("Проверка наличия активной задачи обновления")
+
+        # Проверяем, есть ли уже активная задача для этого токена
+        active_task = await task_manager.get_active_task_by_token(
+            wb_token=token,
+            task_type=TaskType.UPDATE_PRODUCTS
+        )
+        if active_task:
+            logger.info(
+                f"Активная задача уже существует: {active_task.task_id}, "
+                f"статус={active_task.status.value}, "
+                f"прогресс={active_task.processed_items}/{active_task.total_items}"
+            )
+            return {
+                "task_id": active_task.task_id,
+                "status": active_task.status.value,
+                "message": "Задача уже выполняется",
+                "created_at": active_task.created_at.isoformat(),
+            }
+
         if not request or not request.products:
             raise HTTPException(
                 status_code=400,

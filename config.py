@@ -39,9 +39,12 @@ class Settings(BaseSettings):
     # Порог 'свежих' категорий из бд. В часах
     WB_TYPES_MAX_AGE_HOURS: int = 24
 
+    # Elasticsearch настройки
+    ELASTICSEARCH_HOST: str = "http://localhost:9200"
+
     # WB API настройки
-    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
-    WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+    WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    # WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

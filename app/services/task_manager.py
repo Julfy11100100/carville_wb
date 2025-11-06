@@ -98,13 +98,15 @@ class TaskManager:
 
     async def get_active_task_by_token(
             self,
-            wb_token: str
+            wb_token: str,
+            task_type: TaskType,
     ) -> Optional[TaskInfo]:
         """
         Получает последнюю активную задачу по WB токену.
 
         Args:
             wb_token: WildBerries API токен
+            task_type: Тип задачи
 
         Returns:
             TaskInfo если найдена активная задача, иначе None
@@ -118,6 +120,7 @@ class TaskManager:
             active_task = await self.tasks.find_one(
                 {
                     "wb_token": hash_wb_token,
+                    "task_type": task_type.value,
                     "status": {
                         "$in": [TaskStatus.PENDING.value, TaskStatus.RUNNING.value]
                     }
