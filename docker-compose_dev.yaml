@@ -31,7 +31,7 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
     env_file:
-      - .env
+      - .env_develop
     volumes:
       - mongodb_data:/data/db
     ports:
@@ -55,7 +55,7 @@ services:
     container_name: wb_manager
     restart: unless-stopped
     env_file:
-      - .env
+      - .env_develop
     volumes:
       - ./${LOG_FOLDER}:/project/${LOG_FOLDER}
     ports:
