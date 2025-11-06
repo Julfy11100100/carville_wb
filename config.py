@@ -10,7 +10,6 @@ project_root = os.path.dirname(current_path)
 class Settings(BaseSettings):
     # Настройки логгера
     LOG_FOLDER: str = f"{project_root}/logs"
-    LOG_LEVEL: str = "INFO"
 
     # Настройка FastApi
     APP_NAME: str = "Carville WB API Service"
@@ -20,6 +19,7 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     RELOAD: bool = False
+    LOG_LEVEL: str = "INFO"
 
     # Mongo настройки
     MONGO_URL: str = "localhost"
