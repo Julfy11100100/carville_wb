@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Настройка FastApi
     APP_NAME: str = "Carville WB API Service"
     DESCRIPTION: str = "Сервис для работы с WB API и карточками товаров"
-    ROOT_PATH: Optional[str] = None
+    ROOT_PATH: str = "/wb"
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     ELASTICSEARCH_HOST: str = "http://localhost:9200"
 
     # WB API настройки
-    WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
-    # WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
+    WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

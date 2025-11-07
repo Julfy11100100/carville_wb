@@ -40,9 +40,10 @@ def get_logger(name: str = None) -> logging.Logger:
     logger = logging.getLogger(name)
 
     # Пропускаем, если логгер уже настроен
-    if logger.hasHandlers():
+    if logger.handlers:
         return logger
 
+    logger.propagate = False
     logger.setLevel(logging.DEBUG)
 
     # Создаём директорию логов

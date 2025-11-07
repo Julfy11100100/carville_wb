@@ -23,9 +23,9 @@ services:
       timeout: 10s
       retries: 5
 
-  mongodb:
+  wb_mongodb:
     image: mongo:7.0
-    container_name: mongodb
+    container_name: wb_mongodb
     restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
@@ -57,7 +57,9 @@ services:
     env_file:
       - .env_develop
     volumes:
+      - ./app:/project/app
       - ./${LOG_FOLDER}:/project/${LOG_FOLDER}
+      - /project/app/__pycache__
     ports:
       - "${PORT}:${PORT}"
     networks:
@@ -69,7 +71,7 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-      mongodb:
+      wb_mongodb:
         condition: service_healthy
 
 volumes:

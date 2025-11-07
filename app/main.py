@@ -142,5 +142,5 @@ if __name__ == "__main__":
         port=settings.PORT,
         reload=settings.RELOAD,
         log_level="error",
-        access_log=True
+        access_log=False
     )
