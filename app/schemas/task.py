@@ -1,8 +1,9 @@
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, computed_field
 
 
 class TaskStatus(str, Enum):
@@ -40,7 +41,7 @@ class TaskInfo(BaseModel):
     def validate_task_id(cls, v: str) -> str:
         """Валидация task_id"""
         if not v or not v.strip():
-            raise ValueError("task_id cannot be empty")
+            raise ValueError("task_id не может быть пустым")
         return v.strip()
 
     class Config:
@@ -58,11 +59,39 @@ class TaskInfo(BaseModel):
         }
 
 
-class GetTaskRequest(BaseModel):
+class TaskStatusRequest(BaseModel):
     """Модель запроса для получения задач с фильтрами"""
     task_id: Optional[str] = Field(None, description="Фильтр по ID задачи")
-    task_type: Optional[TaskType] = Field(None, description="Фильтр по типу задачи")
+    task_type: TaskType = Field(..., description="Фильтр по типу задачи")
     status: Optional[TaskStatus] = Field(None, description="Фильтр по статусу")
+    period: Optional[str] = Field(None, description="Период в формате: 1h, 2d, 3w")
+
+    def parse_period(self) -> Optional[datetime]:
+        """Парсит строку периода и возвращает datetime"""
+        if not self.period:
+            return None
+
+        pattern = r'^(\d+)([hdw])$'
+        match = re.match(pattern, self.period.lower())
+
+        if not match:
+            raise ValueError(
+                f"Неверный формат периода: '{self.period}'. "
+                f"Ожидаемый формат: <число><единица>, где единица это 'h' (часы), 'd' (дни), или 'w' (недели). "
+                f"Примеры: '1h', '2d', '3w'"
+            )
+
+        amount = int(match.group(1))
+        unit = match.group(2)
+
+        if unit == 'h':
+            delta = timedelta(hours=amount)
+        elif unit == 'd':
+            delta = timedelta(days=amount)
+        elif unit == 'w':
+            delta = timedelta(weeks=amount)
+
+        return datetime.now() - delta
 
     class Config:
         """Конфигурация Pydantic модели"""
@@ -72,3 +101,11 @@ class GetTaskRequest(BaseModel):
                 "status": "completed"
             }
         }
+
+
+class TaskCreateResponse(BaseModel):
+    """Ответ при создании задачи"""
+    task_id: str = Field(..., description="Уникальный идентификатор созданной задачи")
+    task_type: TaskType = Field(..., description="Тип созданной задачи")
+    status: TaskStatus = Field(..., description="Начальный статус задачи")
+    message: str = Field(..., description="Информационное сообщение о следующих шагах")

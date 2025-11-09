@@ -8,22 +8,23 @@ from app.utils.logging import get_logger
 
 logger = get_logger()
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 
 
-@router.get("/tree", tags=["categories"])
+@router.get(
+    "/tree",
+    tags=["categories"],
+    summary="Получить дерево категорий",
+    description="Возвращает полное иерархическое дерево категорий с взаимосвязями родитель-потомок"
+)
 @inject
 async def get_types_tree(
         sql_category_service: SqlCategoryService = Depends(Provide[Container.sql_category_service])
 ):
-    """
-    Получить дерево категорий озон
-    """
-
     try:
         return await sql_category_service.get_types_tree()
     except DatabaseError as e:
-        logger.warning(f"База данных недоступна для дерева типов озона: {str(e)}")
+        logger.warning(f"База данных недоступна для дерева типов wb: {str(e)}")
         raise HTTPException(
             status_code=503,
             detail={"error": "База данных недоступна", "детали": str(e)}

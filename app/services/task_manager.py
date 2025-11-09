@@ -8,7 +8,7 @@ from pymongo.errors import PyMongoError, DuplicateKeyError
 
 from app.services.mongo_repository import MongoRepository
 from app.exceptions.task import TaskDatabaseError, TaskAlreadyExistsError
-from app.schemas.task import TaskInfo, TaskStatus, TaskType, GetTaskRequest
+from app.schemas.task import TaskInfo, TaskStatus, TaskType, TaskStatusRequest
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
 
@@ -276,7 +276,7 @@ class TaskManager:
     async def get_tasks_by_token(
             self,
             wb_token: str,
-            filters: GetTaskRequest
+            filters: TaskStatusRequest
     ) -> list[TaskInfo]:
         """
         Получает список задач по токену с фильтрацией.
@@ -294,16 +294,17 @@ class TaskManager:
         hash_wb_token = hash_token(wb_token)
 
         # Строим query динамически
-        query = {"wb_token": hash_wb_token}
+        query = {"wb_token": hash_wb_token, "task_type": filters.task_type.value}
 
         if filters.task_id:
             query["task_id"] = filters.task_id
 
-        if filters.task_type:
-            query["task_type"] = filters.task_type.value
-
         if filters.status:
             query["status"] = filters.status.value
+
+        filter_date = filters.parse_period()
+        if filter_date:
+            query["created_at"] = {"$gte": filter_date}
 
         try:
             tasks = []

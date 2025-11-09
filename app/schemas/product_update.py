@@ -53,15 +53,3 @@ class ProductUpdateRequest(BaseModel):
                 raise ValueError(f"Продукт #{idx}: type_id должен быть [int, int]")
 
         return v
-
-
-class ProductUpdateResponse(BaseModel):
-    """Ответ на запрос обновления продуктов"""
-    comparison_field: str = Field(..., description="Поле для сравнения")
-    total_products_to_update: int = Field(..., description="Количество продуктов для обновления")
-
-
-class ProductUpdateErrorResponse(BaseModel):
-    """Ответ с ошибкой при обновлении продуктов"""
-    error: str = Field(..., description="Описание ошибки")
-    details: str = Field(..., description="Детали ошибки")

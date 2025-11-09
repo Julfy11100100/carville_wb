@@ -1,16 +1,23 @@
 import jwt
 
 from config import settings
+from app.schemas.auth import CheckTokenResponse
 
 
-def is_valid_token(token: str):
+def is_valid_token(token: str) -> CheckTokenResponse:
     """
     Проверка токена на валидность
     """
 
+    result = CheckTokenResponse(
+        status="success",
+        api_key_valid=True,
+        permissions_valid=True
+    )
+
     # Для работы с тестовыми
     if settings.DEBUG:
-        return True
+        return result
 
     try:
         # Декодируем без проверки подписи, чтобы прочитать payload
@@ -18,11 +25,15 @@ def is_valid_token(token: str):
         s = payload.get('s', 0)
 
         # Проверяем доступ к категории Контент (1-й бит)
-        has_content_access = bool(s & (1 << 1))
+        result.api_key_valid = bool(s & (1 << 1))
 
         # Проверяем тип доступа (30-й бит = только чтение)
-        is_read_only = bool(s & (1 << 30))
+        result.permissions_valid = bool(s & (1 << 30))
 
-        return has_content_access and not is_read_only
+        return result
     except jwt.exceptions.DecodeError:
-        return False
+        return CheckTokenResponse(
+            status="error",
+            api_key_valid=False,
+            permissions_valid=False
+        )

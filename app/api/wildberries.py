@@ -2,11 +2,11 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
 
 from app.containers import Container
-from app.exceptions.task import TaskAlreadyExistsError, TaskDatabaseError
+from app.exceptions.task import TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
-from app.schemas.product_match import ProductMatchRequest
+from app.schemas.product_match import ProductMatchRequest, ProductListMatchResponse, ProductMatchResponse
 from app.schemas.product_update import ProductUpdateRequest
-from app.schemas.task import GetTaskRequest, TaskType
+from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse
 from app.services.product_match_service import ProductMatchService
 from app.services.task_manager import TaskManager
 from app.services.wb_client import WildberriesClient
@@ -14,69 +14,59 @@ from app.utils.jwt import is_valid_token
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
 
-logger = get_logger("api")
-router = APIRouter(prefix="/api")
+logger = get_logger()
+router = APIRouter()
 
 
 def get_wb_token(x_wb_token: str = Header(..., description="WB API токен")) -> str:
-    """
-    Зависимость для получения WB API токена из заголовка запроса
-
-    Args:
-        x_wb_token: WB API токен из заголовка X-WB-Token
-    """
+    """Зависимость для получения WB API токена из заголовка запроса"""
     if not x_wb_token:
         logger.warning("Токен WB API отсутствует в запросе")
         raise HTTPException(
             status_code=401,
             detail="Требуется токен WB API в заголовке X-WB-Token"
         )
-
     return x_wb_token
 
 
-@router.get("/auth/check_token", tags=["authentication"])
+@router.get(
+    "/auth/check-token",
+    tags=["authentication"],
+    summary="Проверка валидности токена",
+    description="Проверяет валидность WB API токена, предоставленного в заголовке X-WB-Token"
+)
 async def check_token(token: str = Depends(get_wb_token)):
-    """
-    Проверяет валидность WB API токена
-
-    Args:
-        token: WB API токен из заголовка X-WB-Token
-    """
     try:
         token_data = is_valid_token(token)
-        if not token_data:
+        if token_data.status != "success":
             logger.warning("Предоставлен невалидный WB токен")
             raise HTTPException(
-                status_code=401,
+                status_code=403,
                 detail="Невалидный токен WB API"
             )
 
         logger.info("Проверка токена успешна")
-
         return token_data
 
     except Exception as e:
         logger.error(f"Ошибка при проверке токена: {e}", exc_info=True)
-
         raise HTTPException(
-            status_code=401,
+            status_code=403,
             detail="Ошибка при проверке токена"
         )
 
 
-@router.get("/product/sample", tags=["products"])
+@router.get(
+    "/product/sample",
+    tags=["products"],
+    summary="Получить пример товара",
+    description="Получает один товар для тестирования API и проверки подключения к WB"
+)
 @inject
 async def get_product(
         token: str = Depends(get_wb_token),
         wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
-    """
-    Получает один товар для тестирования API
-
-    Args:
-        token: WB API токен из заголовка X-WB-Token
-    """
     try:
         logger.info("Запрос примера товара")
         result = await wb_client.get_product(token=token)
@@ -91,7 +81,6 @@ async def get_product(
             f"Ошибка при получении примера товара: {e.message} (код: {e.status_code})",
             exc_info=True
         )
-
         raise HTTPException(
             status_code=e.status_code or 500,
             detail=f"Ошибка WB API: {e.message}"
@@ -99,33 +88,30 @@ async def get_product(
 
     except Exception as e:
         logger.error(f"Неожиданная ошибка при получении примера товара: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"
         )
 
 
-@router.post("/product/collect", tags=["products"])
+@router.post(
+    "/product/info",
+    tags=["products"],
+    summary="Создать задачу сбора товаров",
+    description="Создаёт асинхронную задачу для получения всех товаров. Результат сохраняется в файл и индексируется. "
+                "Если активная задача уже существует для этого токена, возвращается информация о ней.",
+    response_model=TaskCreateResponse
+)
 @inject
 async def create_products_collection_task(
         background_tasks: BackgroundTasks,
         token: str = Depends(get_wb_token),
         task_manager: TaskManager = Depends(Provide[Container.task_manager]),
         wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
-
 ):
-    """
-    Создаёт асинхронную задачу для получения всех товаров.
-    Результат сохраняется в файл.
-
-    Args:
-        token: WB API токен из заголовка X-WB-Token
-    """
     try:
         logger.info("Проверка наличия активной задачи сбора")
 
-        # Проверяем, есть ли уже активная задача для этого токена
         active_task = await task_manager.get_active_task_by_token(
             wb_token=token,
             task_type=TaskType.COLLECT_PRODUCTS
@@ -136,25 +122,19 @@ async def create_products_collection_task(
                 f"статус={active_task.status.value}, "
                 f"прогресс={active_task.processed_items}/{active_task.total_items}"
             )
-            return {
-                "task_id": active_task.task_id,
-                "status": active_task.status.value,
-                "message": "Задача уже выполняется",
-                "created_at": active_task.created_at.isoformat(),
-                "progress": {
-                    "total": active_task.total_items,
-                    "processed": active_task.processed_items
-                }
-            }
+            return TaskCreateResponse(
+                task_type=active_task.task_type,
+                task_id=active_task.task_id,
+                status=active_task.status,
+                message="Активная задача уже существует"
+            )
 
-        # Создаём новую задачу
         logger.info("Создание новой задачи сбора товаров")
         task = await task_manager.create_task(
             wb_token=token,
             task_type=TaskType.COLLECT_PRODUCTS
         )
 
-        # Запускаем фоновую задачу
         background_tasks.add_task(
             wb_client.collect_products_background,
             token,
@@ -163,24 +143,15 @@ async def create_products_collection_task(
 
         logger.info(f"Задача сбора товаров успешно создана: {task.task_id}")
 
-        return {
-            "task_id": task.task_id,
-            "status": task.status.value,
-            "message": "Задача успешно создана",
-            "created_at": task.created_at.isoformat()
-        }
-
-    except TaskAlreadyExistsError as e:
-        logger.warning(f"Задача уже существует: {e.message}")
-
-        raise HTTPException(
-            status_code=409,
-            detail=e.message
+        return TaskCreateResponse(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            status=task.status,
+            message="Задача сбора товаров успешно создана"
         )
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при создании задачи: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=503,
             detail="Сервис базы данных недоступен"
@@ -188,14 +159,20 @@ async def create_products_collection_task(
 
     except Exception as e:
         logger.error(f"Неожиданная ошибка при создании задачи: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"
         )
 
 
-@router.post("/product/update", tags=["products"])
+@router.post(
+    "/product/update",
+    tags=["products"],
+    summary="Создать задачу обновления товаров",
+    description="Создаёт асинхронную задачу для обновления товаров. Поддерживает массовое обновление по nm_id. "
+                "Если активная задача уже существует для этого токена, возвращается информация о ней.",
+    response_model=TaskCreateResponse
+)
 @inject
 async def create_products_update_task(
         request: ProductUpdateRequest,
@@ -205,16 +182,14 @@ async def create_products_update_task(
         wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
     """
-    Создаёт асинхронную задачу для обновления товаров.
+    **Параметры запроса:**
 
-    Args:
-        request: Запрос с полем update_field (имя поля для обновления) и списком товаров с nm_id и новыми значениями
-        token: WB API токен из заголовка X-WB-Token
+    - `update_field`: Имя поля для обновления (обязательно)
+    - `products`: Список товаров с nm_id и новыми значениями (обязательно, не может быть пустым)
     """
     try:
         logger.info("Проверка наличия активной задачи обновления")
 
-        # Проверяем, есть ли уже активная задача для этого токена
         active_task = await task_manager.get_active_task_by_token(
             wb_token=token,
             task_type=TaskType.UPDATE_PRODUCTS
@@ -225,12 +200,12 @@ async def create_products_update_task(
                 f"статус={active_task.status.value}, "
                 f"прогресс={active_task.processed_items}/{active_task.total_items}"
             )
-            return {
-                "task_id": active_task.task_id,
-                "status": active_task.status.value,
-                "message": "Задача уже выполняется",
-                "created_at": active_task.created_at.isoformat(),
-            }
+            return TaskCreateResponse(
+                task_id=active_task.task_id,
+                task_type=active_task.task_type,
+                status=active_task.status,
+                message="Активная задача уже существует"
+            )
 
         if not request or not request.products:
             raise HTTPException(
@@ -249,16 +224,13 @@ async def create_products_update_task(
             f"поле={request.update_field}"
         )
 
-        # Создаём словарь обновлений {nm_id: new_value, ...}
         updates = {int(item.nm_id): item.value for item in request.products}
 
-        # Создаём задачу
         task = await task_manager.create_task(
             wb_token=token,
             task_type=TaskType.UPDATE_PRODUCTS
         )
 
-        # Запускаем фоновую задачу с корректными параметрами
         background_tasks.add_task(
             wb_client.update_products_background,
             token,
@@ -272,18 +244,15 @@ async def create_products_update_task(
             f"товаров={len(updates)}, поле={request.update_field}"
         )
 
-        return {
-            "task_id": task.task_id,
-            "status": task.status.value,
-            "message": "Задача обновления успешно создана",
-            "created_at": task.created_at.isoformat(),
-            "total_items": len(updates),
-            "update_field": request.update_field
-        }
+        return TaskCreateResponse(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            status=task.status,
+            message="Задача обновления товаров успешно создана"
+        )
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при создании задачи обновления: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=503,
             detail="Сервис базы данных недоступен"
@@ -291,7 +260,6 @@ async def create_products_update_task(
 
     except ValueError as e:
         logger.error(f"Ошибка валидации данных: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=400,
             detail=f"Ошибка в данных запроса: {str(e)}"
@@ -299,99 +267,35 @@ async def create_products_update_task(
 
     except Exception as e:
         logger.error(f"Неожиданная ошибка при создании задачи обновления: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"
         )
 
 
-@router.get("/tasks/{task_id}", tags=["tasks"])
-@inject
-async def get_task_status(
-        task_id: str,
-        token: str = Depends(get_wb_token),
-        task_manager: TaskManager = Depends(Provide[Container.task_manager])
-):
+@router.post(
+    "/product/tasks/status",
+    tags=["tasks"],
+    summary="Получить список задач",
+    description="""Получает список задач по токену с опциональной фильтрацией\n
+    **Параметры фильтра:**\n
+
+    - `task_id`: Фильтр по ID задачи (опционально)\n
+    - `task_type`: Фильтр по типу задачи (обязательно)\n
+    - `status`: Фильтр по статусу (опционально)\n
+    - `period`: Период в формате: 1h, 2d, 3w (опционально). Примеры: '1h' (последний час), '2d' (последние 2 дня), '3w' (последние 3 недели)
     """
-    Получает статус конкретной задачи по её ID
-
-    Args:
-        task_id: ID задачи для получения информации
-        token: WB API токен из заголовка X-WB-Token
-    """
-    try:
-        logger.debug(f"Получение статуса задачи: {task_id}")
-
-        task = await task_manager.get_task_by_id(token, task_id)
-
-        if not task:
-            logger.warning(f"Задача не найдена: {task_id}")
-
-            raise HTTPException(
-                status_code=404,
-                detail=f"Задача с ID {task_id} не найдена"
-            )
-
-        logger.debug(f"Статус задачи получен: {task_id}, статус={task.status.value}")
-
-        return {
-            "task_id": task.task_id,
-            "task_type": task.task_type.value,
-            "status": task.status.value,
-            "created_at": task.created_at.isoformat(),
-            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-            "progress": {
-                "total": task.total_items,
-                "processed": task.processed_items,
-            },
-            "file_path": task.file_path,
-            "category_ids": task.category_ids,
-            "error": task.error,
-            "metadata": task.metadata
-        }
-
-    except TaskDatabaseError as e:
-        logger.error(f"Ошибка базы данных при получении статуса задачи {task_id}: {e}", exc_info=True)
-
-        raise HTTPException(
-            status_code=503,
-            detail="Сервис базы данных недоступен"
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при получении статуса задачи {task_id}: {e}", exc_info=True)
-
-        raise HTTPException(
-            status_code=500,
-            detail="Внутренняя ошибка сервера"
-        )
-
-
-@router.post("/tasks/search", tags=["tasks"])
+)
 @inject
 async def search_tasks(
-        filters: GetTaskRequest,
+        filters: TaskStatusRequest,
         token: str = Depends(get_wb_token),
         task_manager: TaskManager = Depends(Provide[Container.task_manager])
 ):
-    """
-    Получает список задач по токену с фильтрацией
-
-    Args:
-        filters: Фильтры для поиска задач (task_id, task_type, status)
-        token: WB API токен из заголовка X-WB-Token
-    """
     try:
-        task_type = filters.task_type.value if filters.task_type else None
-        status = filters.status.value if filters.status else None
-
         logger.info(
             f"Поиск задач: task_id={filters.task_id}, "
-            f"task_type={task_type}, status={status}"
+            f"task_type={filters.task_type}, status={filters.status}"
         )
 
         tasks = await task_manager.get_tasks_by_token(
@@ -422,7 +326,6 @@ async def search_tasks(
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при поиске задач: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=503,
             detail="Сервис базы данных недоступен"
@@ -430,27 +333,32 @@ async def search_tasks(
 
     except Exception as e:
         logger.error(f"Неожиданная ошибка при поиске задач: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"
         )
 
 
-@router.post("/match", tags=["products"])
+@router.post(
+    "/product/match",
+    tags=["products"],
+    summary="Сопоставить товары",
+    description="""Сопостовляет товары WB с товарами из БД по указанным полям для сравнения значений\n
+     **Параметры запроса:**\n
+    - `wb_match_field`: Поле по которому будем матчить полученные товары из API с нашими (обязательно)\n
+    - `carville_match_field`: Поле в нашей БД с которым будем матчить продукты (обязательно)\n
+    - `category_id`: ID категории товаров которые будем матчить (обязательно, не может быть отрицательным)\n
+    - `comparison_field`: Имя поля которое будем сравнивать у сматченных объектов (обязательно)\n
+    - `brand`: Бренд для фильтрации товаров из WB API (опционально)
+    """,
+    response_model=ProductListMatchResponse
+)
 @inject
 async def match_products(
         request: ProductMatchRequest,
         token: str = Depends(get_wb_token),
         product_match_service: ProductMatchService = Depends(Provide[Container.product_match_service])
 ):
-    """
-    Сопостовляет товары WB с товарами из БД
-
-    Args:
-        request: Запрос с полями wb_match_field (поле WB для матча), carville_match_field (поле БД), category_id (ID категории), comparison_field (поле для сравнения), brand (опционально фильтр по бренду)
-        token: WB API токен из заголовка X-WB-Token
-    """
     try:
         result = await product_match_service.match_products(
             token=hash_token(token),
@@ -461,10 +369,12 @@ async def match_products(
             brand=request.brand
         )
 
-        # Логируем то, что вернул сервис
         result_status = result.get("status", "error")
         result_message = result.get("message", None)
-        result_products = result.get("products", [])
+        result_products = [
+            ProductMatchResponse.model_validate(product)
+            for product in result.get("products", [])
+        ]
         total_products_count = result.get("total_products")
         matched_products_count = result.get("matched_products")
         sample_count = min(3, len(result_products))
@@ -482,23 +392,17 @@ async def match_products(
                 detail={"error": "Ошибка сопоставления продуктов", "details": error_msg}
             )
 
-        logger.info(f"✅ Product matching completed successfully for token {hash_token(token)}")
+        logger.info(f"Успешно сопоставили товары для токена {hash_token(token)}")
 
-        return {
-            "ozon_match_field": request.wb_match_field,
-            "carville_match_field": request.carville_match_field,
-            "category_id": request.category_id,
-            "comparison_field": request.comparison_field,
-            "brand": request.brand,
-            "products": result_products,
-            "total_products": total_products_count,
-            "matched_products": matched_products_count
-        }
+        return ProductListMatchResponse(
+            **request.model_dump(),
+            products=result_products,
+            total_products=total_products_count,
+            matched_products=matched_products_count
+        )
 
     except Exception as e:
-
         logger.error(f"Неожиданная ошибка при сопоставлении продуктов: {e}", exc_info=True)
-
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"

@@ -6,11 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import wildberries
-from app.api import categories
-from app.api.categories import router as categories_router
-from app.api.default import router as default_router
-from app.api.wildberries import router as wb_router
+from app.api import router, wildberries, categories
 from app.containers import Container
 from app.utils.logging import get_logger
 from config import settings
@@ -84,9 +80,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(default_router)
-app.include_router(wb_router)
-app.include_router(categories_router)
+app.include_router(router)
 
 
 @app.middleware("http")
