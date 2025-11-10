@@ -155,6 +155,10 @@ class WildberriesClient:
             nm_ids = list(updates.keys())
             hashed_token = hash_token(token)
 
+            # Маппинг vendorCode -> nmID (1:1)
+            vendor_code_to_nm_id = {}
+            nm_id_to_vendor_code = {}
+
             task_info.metadata = {
                 "nm_ids": nm_ids,
                 "update_field": field,
@@ -166,7 +170,8 @@ class WildberriesClient:
                 "final_success_count": None,
                 "elasticsearch_update_count": 0,
                 "batches_sent": 0,
-                "skipped_without_changes": 0
+                "skipped_without_changes": 0,
+                "vendor_code_to_nm_id": {}  # Добавляем маппинг
             }
 
             await self.task_manager.save_task(task_info)
@@ -217,13 +222,20 @@ class WildberriesClient:
                 # Обновляем поле на новое значение в каждой карточке
                 for product in batch_products:
                     nm_id = product.get("nmID")
+                    vendor_code = product.get("vendorCode")
+
                     if nm_id in batch_updates:
                         old_value = product.get(field)
                         new_value = batch_updates[nm_id]
                         product[field] = new_value
 
+                        # Строим маппинг vendorCode <-> nmID (1:1)
+                        if vendor_code:
+                            vendor_code_to_nm_id[vendor_code] = nm_id
+                            nm_id_to_vendor_code[nm_id] = vendor_code
+
                         logger.debug(
-                            f"Обновлено поле '{field}' для nmID {nm_id}: "
+                            f"Обновлено поле '{field}' для nmID {nm_id} (vendorCode={vendor_code}): "
                             f"{old_value} -> {new_value}"
                         )
 
@@ -242,6 +254,7 @@ class WildberriesClient:
                 task_info.metadata["batches_sent"] = batches_sent
                 task_info.metadata["update_sent_at"] = datetime.now().isoformat()
                 task_info.metadata["skipped_without_changes"] = skipped_count
+                task_info.metadata["vendor_code_to_nm_id"] = vendor_code_to_nm_id
                 await self.task_manager.save_task(task_info)
 
                 logger.info(
@@ -253,13 +266,15 @@ class WildberriesClient:
 
             logger.info(
                 f"Все {batches_sent} пакетов отправлены в WB: {task_info.task_id}, "
-                f"пропущено без изменений={skipped_count}"
+                f"пропущено без изменений={skipped_count}, "
+                f"уникальных vendorCode'ов={len(vendor_code_to_nm_id)}"
             )
 
             # 2. Проверяем результаты с поллингом
             result = await self._check_update_results_with_polling(
                 token=token,
                 task_info=task_info,
+                vendor_code_to_nm_id=vendor_code_to_nm_id,
                 max_attempts=5,
                 initial_delay=10,
                 retry_delay=15
@@ -371,6 +386,7 @@ class WildberriesClient:
             self,
             token: str,
             task_info: TaskInfo,
+            vendor_code_to_nm_id: Dict[str, int],
             max_attempts: int = 5,
             initial_delay: int = 10,
             retry_delay: int = 15,
@@ -383,6 +399,7 @@ class WildberriesClient:
         Args:
             token: API токен
             task_info: Информация о задаче
+            vendor_code_to_nm_id: Маппинг vendorCode -> nmID (1:1)
             max_attempts: Максимальное количество попыток
             initial_delay: Первая задержка (сек)
             retry_delay: Задержка между попытками (сек)
@@ -391,14 +408,13 @@ class WildberriesClient:
         Returns:
             Результаты с информацией об ошибках
         """
-        metadata = task_info.metadata or {}
-        nm_ids = set(metadata.get("nm_ids", []))
+        vendor_codes = set(vendor_code_to_nm_id.keys())
         total_products = task_info.total_items or 0
 
-        if not nm_ids:
+        if not vendor_codes:
             return {
                 "checked": False,
-                "reason": "Нет nmID в метаданных задачи",
+                "reason": "Нет vendorCode в маппинге",
                 "polling_attempts": 0
             }
 
@@ -409,7 +425,10 @@ class WildberriesClient:
 
         await asyncio.sleep(initial_delay)
 
-        logger.info(f"Начало поллинга результатов: {task_info.task_id}, макс_попыток={max_attempts}")
+        logger.info(
+            f"Начало поллинга результатов: {task_info.task_id}, "
+            f"макс_попыток={max_attempts}, отслеживаем {len(vendor_codes)} vendorCode'ов"
+        )
 
         while attempt < max_attempts:
             if datetime.now() > timeout_deadline:
@@ -422,7 +441,11 @@ class WildberriesClient:
                 logger.debug(f"Проверка результатов {task_info.task_id}: попытка {attempt}/{max_attempts}")
 
                 all_errors = await self.api.get_all_errors_for_update(token)
-                stats = self._calculate_error_statistics(all_errors, nm_ids, total_products)
+                stats = self._calculate_error_statistics(
+                    all_errors,
+                    vendor_code_to_nm_id,
+                    total_products
+                )
 
                 current_error_count = stats["error_count"]
 
@@ -446,10 +469,8 @@ class WildberriesClient:
                             "error_count": current_error_count,
                             "success_rate": stats["success_rate"],
                             "error_nm_ids": list(stats["error_nm_ids"]),
-                            "error_details": {
-                                str(nm_id): errors
-                                for nm_id, errors in stats["error_details"].items()
-                            },
+                            "error_vendor_codes": list(stats["error_vendor_codes"]),
+                            "error_details": stats["error_details"],
                             "error_batches_count": len(stats["error_batches"]),
                             "polling_attempts": attempt,
                             "stable": True
@@ -469,10 +490,8 @@ class WildberriesClient:
                         "error_count": current_error_count,
                         "success_rate": stats["success_rate"],
                         "error_nm_ids": list(stats["error_nm_ids"]),
-                        "error_details": {
-                            str(nm_id): errors
-                            for nm_id, errors in stats["error_details"].items()
-                        },
+                        "error_vendor_codes": list(stats["error_vendor_codes"]),
+                        "error_details": stats["error_details"],
                         "error_batches_count": len(stats["error_batches"]),
                         "polling_attempts": attempt,
                         "stable": False,
@@ -502,45 +521,140 @@ class WildberriesClient:
     @staticmethod
     def _filter_relevant_errors(
             all_errors: List[Dict[str, Any]],
-            nm_ids: Set[int]
+            vendor_codes: Set[str]
     ) -> List[Dict[str, Any]]:
-        """Фильтрует пакеты ошибок по nmID"""
+        """Фильтрует пакеты ошибок по vendorCode"""
         relevant = []
         for batch in all_errors:
-            batch_nm_ids = set(batch.get("nmIDs", []))
-            if batch_nm_ids & nm_ids:
+            # Пытаемся получить vendorCodes разными способами
+            batch_vendor_codes = batch.get("vendorCodes", [])
+
+            if not batch_vendor_codes:
+                # Если нет поля vendorCodes, берем ключи из errors
+                batch_vendor_codes = list(batch.get("errors", {}).keys())
+
+            if not batch_vendor_codes:
+                # Если и там нет, берем из subjects
+                batch_vendor_codes = list(batch.get("subjects", {}).keys())
+
+            batch_vendor_codes_set = set(batch_vendor_codes)
+
+            # Проверяем пересечение с нашими vendorCode'ами
+            if batch_vendor_codes_set & vendor_codes:
                 relevant.append(batch)
+
         return relevant
 
     def _calculate_error_statistics(
             self,
             all_errors: List[Dict[str, Any]],
-            nm_ids: Set[int],
+            vendor_code_to_nm_id: Dict[str, int],
             total_products: int
     ) -> Dict[str, Any]:
         """
-        Подсчитывает статистику ошибок.
-        ВАЖНО: Считает КАРТОЧКИ с ошибками, не сами ошибки.
+        Подсчитывает статистику ошибок по vendorCode с маппингом на nmID.
+
+        Так как vendorCode уникален, каждый vendorCode -> ровно один nmID.
         """
-        relevant_errors = self._filter_relevant_errors(all_errors, nm_ids)
+        vendor_codes = set(vendor_code_to_nm_id.keys())
+        relevant_errors = self._filter_relevant_errors(all_errors, vendor_codes)
 
         error_nm_ids = set()
-        error_details = {}
+        error_vendor_codes = set()
+        error_details_by_nm_id = {}
 
         for batch in relevant_errors:
             batch_errors = batch.get("errors", {})
-            error_details.update(batch_errors)
-            error_nm_ids.update(batch_errors.keys())
+            batch_subjects = batch.get("subjects", {})
+
+            for vendor_code, errors in batch_errors.items():
+                # Получаем соответствующий nmID
+                nm_id = vendor_code_to_nm_id.get(vendor_code)
+
+                if nm_id is None:
+                    # Если vendorCode не в нашем маппинге, пропускаем (не наша карточка)
+                    logger.debug(f"Пропущен vendorCode={vendor_code} (не в списке отправленных)")
+                    continue
+
+                error_nm_ids.add(nm_id)
+                error_vendor_codes.add(vendor_code)
+
+                subject_info = batch_subjects.get(vendor_code, {})
+
+                # Логируем детали
+                logger.warning(
+                    f"Ошибка для vendorCode={vendor_code} (nmID={nm_id}): {errors}"
+                )
+
+                # Сохраняем детали для nmID
+                error_details_by_nm_id[str(nm_id)] = {
+                    "vendor_code": vendor_code,
+                    "subject_id": subject_info.get("id"),
+                    "subject_name": subject_info.get("name"),
+                    "errors": errors
+                }
 
         error_count = len(error_nm_ids)
         success_count = total_products - error_count
         success_rate = success_count / total_products if total_products > 0 else 0
+
+        logger.info(
+            f"Статистика ошибок: всего={total_products}, "
+            f"успешно={success_count}, ошибок={error_count}, "
+            f"уникальных vendorCode'ов с ошибками={len(error_vendor_codes)}"
+        )
 
         return {
             "success_count": success_count,
             "error_count": error_count,
             "success_rate": success_rate,
             "error_nm_ids": error_nm_ids,
-            "error_details": error_details,
+            "error_vendor_codes": error_vendor_codes,
+            "error_details": error_details_by_nm_id,
             "error_batches": relevant_errors
         }
+
+    async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> List[Dict[str, Any]]:
+        """Получает все пакеты ошибок для полноценного мониторинга."""
+        all_error_batches = []
+        cursor = {"limit": 100}
+        iteration = 0
+
+        logger.info("Начало сбора всех ошибок обновления")
+
+        while iteration < max_batches:
+            body = {
+                "cursor": cursor,
+                "order": {"ascending": True}
+            }
+
+            response = await self.api.make_request(
+                "POST",
+                "/content/v2/cards/error/list",
+                token,
+                json=body
+            )
+
+            data = response.get("data", {})
+            items = data.get("items", [])
+
+            if not items:
+                break
+
+            all_error_batches.extend(items)
+
+            response_cursor = data.get("cursor", {})
+            if not response_cursor.get("next", False):
+                break
+
+            cursor = {
+                "limit": 100,
+                "updatedAt": response_cursor.get("updatedAt"),
+                "batchUUID": response_cursor.get("batchUUID")
+            }
+
+            iteration += 1
+            await asyncio.sleep(6)  # rate limit
+
+        logger.info(f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок")
+        return all_error_batches
