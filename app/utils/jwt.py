@@ -11,8 +11,7 @@ def is_valid_token(token: str) -> CheckTokenResponse:
 
     result = CheckTokenResponse(
         status="success",
-        api_key_valid=True,
-        permissions_valid=True
+        api_key_valid=True
     )
 
     # Для работы с тестовыми
@@ -25,15 +24,16 @@ def is_valid_token(token: str) -> CheckTokenResponse:
         s = payload.get('s', 0)
 
         # Проверяем доступ к категории Контент (1-й бит)
-        result.api_key_valid = bool(s & (1 << 1))
+        content = bool(s & (1 << 1))
 
         # Проверяем тип доступа (30-й бит = только чтение) должен быть не только чтение, поэтому not
-        result.permissions_valid = not bool(s & (1 << 30))
+        read_only = bool(s & (1 << 30))
+
+        result.api_key_valid = content and not read_only
 
         return result
     except jwt.exceptions.DecodeError:
         return CheckTokenResponse(
             status="error",
-            api_key_valid=False,
-            permissions_valid=False
+            api_key_valid=False
         )
