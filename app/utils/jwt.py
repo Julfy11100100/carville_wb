@@ -27,8 +27,8 @@ def is_valid_token(token: str) -> CheckTokenResponse:
         # Проверяем доступ к категории Контент (1-й бит)
         result.api_key_valid = bool(s & (1 << 1))
 
-        # Проверяем тип доступа (30-й бит = только чтение)
-        result.permissions_valid = bool(s & (1 << 30))
+        # Проверяем тип доступа (30-й бит = только чтение) должен быть не только чтение, поэтому not
+        result.permissions_valid = not bool(s & (1 << 30))
 
         return result
     except jwt.exceptions.DecodeError:
