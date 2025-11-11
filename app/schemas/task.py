@@ -50,7 +50,7 @@ class TaskInfo(BaseModel):
             "example": {
                 "task_id": "550e8400-e29b-41d4-a716-446655440000",
                 "wb_token": "hashed_token_value",
-                "task_type": "collect_products",
+                "task_type": "products_info",
                 "status": "running",
                 "created_at": "2025-10-23T10:00:00Z",
                 "total_items": 1000,
@@ -97,7 +97,7 @@ class TaskStatusRequest(BaseModel):
         """Конфигурация Pydantic модели"""
         json_schema_extra = {
             "example": {
-                "task_type": "collect_products",
+                "task_type": "products_info",
                 "status": "completed"
             }
         }
