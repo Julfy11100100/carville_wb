@@ -274,7 +274,7 @@ async def create_products_update_task(
 
 
 @router.post(
-    "/product/tasks/status",
+    "/product/task/status",
     tags=["tasks"],
     summary="Получить список задач",
     description="""Получает список задач по токену с опциональной фильтрацией\n
