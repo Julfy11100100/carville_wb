@@ -114,7 +114,7 @@ async def create_products_collection_task(
 
         active_task = await task_manager.get_active_task_by_token(
             wb_token=token,
-            task_type=TaskType.COLLECT_PRODUCTS
+            task_type=TaskType.PRODUCTS_INFO
         )
         if active_task:
             logger.info(
@@ -132,7 +132,7 @@ async def create_products_collection_task(
         logger.info("Создание новой задачи сбора товаров")
         task = await task_manager.create_task(
             wb_token=token,
-            task_type=TaskType.COLLECT_PRODUCTS
+            task_type=TaskType.PRODUCTS_INFO
         )
 
         background_tasks.add_task(
@@ -192,7 +192,7 @@ async def create_products_update_task(
 
         active_task = await task_manager.get_active_task_by_token(
             wb_token=token,
-            task_type=TaskType.UPDATE_PRODUCTS
+            task_type=TaskType.PRODUCT_UPDATE
         )
         if active_task:
             logger.info(
@@ -228,7 +228,7 @@ async def create_products_update_task(
 
         task = await task_manager.create_task(
             wb_token=token,
-            task_type=TaskType.UPDATE_PRODUCTS
+            task_type=TaskType.PRODUCT_UPDATE
         )
 
         background_tasks.add_task(
@@ -315,10 +315,8 @@ async def search_tasks(
                 "status": task.status.value,
                 "created_at": task.created_at.isoformat(),
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                "progress": {
-                    "total": task.total_items,
-                    "processed": task.processed_items
-                },
+                "products_count": task.total_items,
+                "category_ids": task.category_ids if task.category_ids else None,
                 "error": task.error
             }
             for task in tasks

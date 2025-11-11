@@ -17,8 +17,8 @@ class TaskStatus(str, Enum):
 
 class TaskType(str, Enum):
     """Тип задачи"""
-    COLLECT_PRODUCTS = "collect_products"
-    UPDATE_PRODUCTS = "update_products"
+    PRODUCTS_INFO = "products_info"
+    PRODUCT_UPDATE = "product_update"
 
 
 class TaskInfo(BaseModel):
