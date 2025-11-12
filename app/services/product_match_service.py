@@ -178,7 +178,7 @@ class ProductMatchService:
                                     recommend_val = [category_id, recommend_val]
 
                             result_products.append({
-                                "nmId": nmid_val,
+                                "nm_id": nmid_val,
                                 "identifier_value": ident_key,
                                 "carville_value": recommend_val,
                                 "wb_value": comparison_val
