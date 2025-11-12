@@ -317,6 +317,7 @@ async def search_tasks(
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
                 "products_count": task.total_items,
                 "category_ids": task.category_ids if task.category_ids else None,
+                "categories_count": task.categories_count,
                 "error": task.error
             }
             for task in tasks

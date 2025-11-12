@@ -50,13 +50,6 @@ class Container(containers.DeclarativeContainer):
 
     )
 
-    wildberries_client = providers.Factory(
-        WildberriesClient,
-        task_manager=task_manager,
-        elasticsearch_service=elasticsearch_service,
-        api_client=wildberries_api
-    )
-
     sql_database_repository = providers.Singleton(
         SQLDatabaseRepository
     )
@@ -70,4 +63,12 @@ class Container(containers.DeclarativeContainer):
     sql_category_service = providers.Singleton(
         SqlCategoryService,
         sql_repository=sql_database_repository
+    )
+
+    wildberries_client = providers.Factory(
+        WildberriesClient,
+        task_manager=task_manager,
+        elasticsearch_service=elasticsearch_service,
+        api_client=wildberries_api,
+        sql_category_service=sql_category_service
     )

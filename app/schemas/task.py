@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Dict, List
 
 from pydantic import BaseModel, Field, field_validator, computed_field
 
@@ -31,10 +31,11 @@ class TaskInfo(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="Время завершения задачи")
     total_items: int = Field(0, description="Общее количество элементов")
     processed_items: int = Field(0, description="Количество обработанных элементов")
-    category_ids: list[int] = Field(default_factory=list, description="ID категорий")
+    category_ids: Optional[Dict[str, List[int]]] = Field(None, description="Словарь {category_id: [type_id, ...]} с уникальными type_id для каждой категории (только для products_info)")
+    categories_count: Optional[int] = Field(None,description="Количество уникальных категорий (только для products_info)")
     file_path: Optional[str] = Field(None, description="Путь к файлу с результатами")
     error: Optional[str] = Field(None, description="Сообщение об ошибке")
-    metadata: Optional[dict[str, Any]] = Field(None, description="Дополнительные метаданные")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Дополнительные метаданные")
 
     @field_validator('task_id')
     @classmethod

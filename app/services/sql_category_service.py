@@ -418,3 +418,38 @@ class SqlCategoryService:
             root_categories.append(root_category)
 
         return WbTypesTreeResponse(root_categories=root_categories)
+
+    async def get_parents_category_by_id_categories(self, categories_ids: List[int]) -> Dict[str, List[int]]:
+        """Получить словарь [{id родительской категории -> id категории}]"""
+        query = f"""
+            SELECT 
+	            p.type_id AS parent_id,
+                c.type_id
+            FROM 
+                {self.table} c
+            LEFT JOIN 
+                {self.table} p ON c.parent_id = p.id
+            WHERE 
+                c.type_id IN ({','.join(map(str, categories_ids))})
+            ORDER BY 
+                c.type_id;
+           """
+
+        try:
+            # Используем query_timeout=5 секунд для защиты от длинных блокировок
+            async with self.sql.get_connection() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(query)
+                    rows = await cursor.fetchall()
+                    result = {}
+                    for row in rows:
+                        if row[0]:
+                            result.setdefault(str(row[0]), []).append(row[1])
+
+                    return result
+
+        except DatabaseError:
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при извлечении родительских типов из бд: {str(e)}")
+            raise DatabaseError(f"Ошибка извлечения родительских типов из бд: {str(e)}")

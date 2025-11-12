@@ -6,6 +6,7 @@ from app.exceptions.wb_api import WildberriesRateLimitError
 from app.schemas.task import TaskStatus, TaskInfo
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.product_file_service import ProductFileService
+from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
 from app.services.wb_api import WildberriesAPI
 from app.utils.logging import get_logger
@@ -25,6 +26,7 @@ class WildberriesClient:
             task_manager: TaskManager,
             elasticsearch_service: ElasticsearchService,
             api_client: WildberriesAPI,
+            sql_category_service: SqlCategoryService
     ):
         """
         Args:
@@ -38,6 +40,9 @@ class WildberriesClient:
 
         # HTTP API клиент
         self.api = api_client
+
+        # SQL сервис
+        self.category_service = sql_category_service
 
     async def get_product(self, token: str) -> Dict[str, Any]:
         """Получение одного товара"""
@@ -105,10 +110,14 @@ class WildberriesClient:
                 products=all_products
             )
 
+            # Получаем из бд список [{id родительской: id категории}]
+            full_category_ids = await self.category_service.get_parents_category_by_id_categories(list(category_ids))
+
             task_info.status = TaskStatus.COMPLETED
             task_info.completed_at = datetime.now()
             task_info.total_items = len(all_products)
-            task_info.category_ids = list(category_ids)
+            task_info.categories_count = len(category_ids)
+            task_info.category_ids = full_category_ids
             task_info.file_path = file_path
 
             logger.info(
