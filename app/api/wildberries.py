@@ -8,6 +8,7 @@ from app.schemas.product_match import ProductMatchRequest, ProductListMatchRespo
 from app.schemas.product_update import ProductUpdateRequest
 from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse
 from app.services.product_match_service import ProductMatchService
+from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
 from app.services.wb_client import WildberriesClient
 from app.utils.jwt import is_valid_token
@@ -356,14 +357,20 @@ async def search_tasks(
 async def match_products(
         request: ProductMatchRequest,
         token: str = Depends(get_wb_token),
+        sql_categories_service: SqlCategoryService = Depends(Provide[Container.sql_category_service]),
         product_match_service: ProductMatchService = Depends(Provide[Container.product_match_service])
 ):
     try:
+        # Обрабатываем категории
+        categories = request.category_ids
+        if not categories:
+            categories = await sql_categories_service.get_categories_by_parent_id(parent_id=request.root_category_id)
+
         result = await product_match_service.match_products(
             token=hash_token(token),
             wb_match_field=request.wb_match_field,
             carville_match_field=request.carville_match_field,
-            category_id=request.category_id,
+            categories=categories,
             comparison_field=request.comparison_field,
             brand=request.brand
         )

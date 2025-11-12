@@ -26,7 +26,7 @@ class ProductMatchService:
             token: str,
             wb_match_field: str,
             carville_match_field: str,
-            category_id: int,
+            categories: List[int],
             comparison_field: str,
             brand: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -37,7 +37,7 @@ class ProductMatchService:
             token: token клиента
             wb_match_field: Поле для сопоставления в WB (например, 'nmId', 'barcode')
             carville_match_field: Поле для сопоставления в БД (например, 'code', 'bar_code')
-            category_id: ID категории товаров
+            categories: Список категорий
             comparison_field: Поле для сравнения (например, 'type_id', 'name')
             brand: ID бренда для фильтрации (опционально, преобразуется в строку для процедуры)
         Returns:
@@ -47,14 +47,14 @@ class ProductMatchService:
             logger.info(f"Начало сопоставления товаров для клиента {token}...")
             logger.info(
                 f"Параметры: wb_match_field='{wb_match_field}', db_field='{carville_match_field}', "
-                f"category_id={category_id}, comparison_field='{comparison_field}', brand='{brand}'"
+                f"categories={categories}, comparison_field='{comparison_field}', brand='{brand}'"
             )
 
             # 1. Получаем товары из Elasticsearch
             logger.info("Получение товаров из Elasticsearch...")
             products = await self._get_products_from_elasticsearch(
                 token=token,
-                category_id=category_id,
+                categories=categories,
                 wb_match_field=wb_match_field,
                 comparison_field=comparison_field
             )
@@ -62,7 +62,7 @@ class ProductMatchService:
             total_products_count = len(products)
 
             if not products:
-                logger.warning(f"Товары не найдены в категории {category_id}")
+                logger.warning(f"Товары не найдены в категориях {categories}")
                 return {
                     "status": "success",
                     "message": "No products found in the specified category",
@@ -136,7 +136,7 @@ class ProductMatchService:
                     ident_val_raw = row.get("Ident_tov")
                     recommend_val = row.get("Recommend")
                     type_id = row.get("Type_id")
-                    category_id = row.get("Parent_id")
+                    category_id = row.get("subjectID")
                     # Отфильтруем пустые рекомендации, чтобы удовлетворять схеме ответа
                     if ident_val_raw is None or recommend_val is None:
                         continue
@@ -205,7 +205,7 @@ class ProductMatchService:
     async def _get_products_from_elasticsearch(
             self,
             token: str,
-            category_id: int,
+            categories: List[int],
             wb_match_field: str,
             comparison_field: str
     ) -> List[Dict[str, Any]]:
@@ -220,7 +220,7 @@ class ProductMatchService:
         try:
             result = await self.elasticsearch_service.search_products(
                 token=token,
-                filters={"subjectID": category_id},
+                filters={"subjectID": categories},
                 limit=50000,  # Получаем все товары в категории
                 fields=fields_to_fetch
             )

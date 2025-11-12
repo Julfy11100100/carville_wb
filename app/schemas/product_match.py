@@ -9,7 +9,9 @@ class ProductMatchRequest(BaseModel):
     wb_match_field: str = Field(...,
                                 description="Поле по которому будем матчить полученные товары из API с нашими")
     carville_match_field: str = Field(..., description="Поле в нашей БД с которым будем матчить продукты")
-    category_id: int = Field(..., description="ID категории товаров которые будем матчить")
+    root_category_id: int = Field(...,
+                             description="ID родительской категории товаров которые будем матчить (берём все дочернии)")
+    category_ids: Optional[List[int]] = Field(None, description="Список категорий, необязательный параметр")
     comparison_field: str = Field(..., description="Имя поля которое будем сравнивать у сматченных объектов")
     brand: Optional[int] = Field(None, description="Бренд для фильтрации")
 
@@ -34,12 +36,20 @@ class ProductMatchRequest(BaseModel):
                 f"Недопустимое comparison_field '{v}' Допустимые поля {','.join(VALID_COMPARISON_FIELDS)}")
         return v
 
-    @field_validator('category_id')
-    def validate_category_id(cls, v):
+    @field_validator('root_category_id')
+    def validate_root_category_id(cls, v):
         if v < 0:
-            raise ValueError(f"Поле category_id не может быть отрицательным")
+            raise ValueError(f"Поле root_category_id не может быть отрицательным")
         return v
 
+    @field_validator('category_ids')
+    def validate_category_ids(cls, v):
+        if v is None:
+            return v
+        for category in v:
+            if category < 0:
+                raise ValueError(f"Поле category в category_ids не может быть отрицательным")
+        return v
 
 class ProductMatchResponse(BaseModel):
     """Ответ с информацией о сопоставленном товаре"""

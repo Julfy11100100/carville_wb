@@ -445,9 +445,39 @@ class SqlCategoryService:
                     for row in rows:
                         if row[0]:
                             result.setdefault(str(row[0]), []).append(row[1])
-
+                    logger.info(f"Получили список сопоставлений родительских id категорий c категориями: {result}")
                     return result
 
+        except DatabaseError:
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при извлечении родительских типов из бд: {str(e)}")
+            raise DatabaseError(f"Ошибка извлечения родительских типов из бд: {str(e)}")
+
+    async def get_categories_by_parent_id(self, parent_id: int) -> List[int]:
+        """Получить словарь категорий по id родительской"""
+        query = f"""
+            SELECT 
+                c.type_id
+            FROM 
+                wb_type c
+            LEFT JOIN 
+                wb_type p ON c.parent_id = p.id
+            WHERE 
+                p.type_id = {parent_id}
+            ORDER BY 
+                p.type_id;           
+            """
+
+        try:
+            # Используем query_timeout=5 секунд для защиты от длинных блокировок
+            async with self.sql.get_connection() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(query)
+                    rows = await cursor.fetchall()
+                    result = [row[0] for row in rows if row]
+                    logger.info(f"Получили список категорий по родительской {parent_id}: {result}")
+                    return result
         except DatabaseError:
             raise
         except Exception as e:

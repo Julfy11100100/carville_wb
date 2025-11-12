@@ -145,7 +145,6 @@ class ElasticsearchService(ReconnectableService):
                             # Категоризация
                             "subjectID": {"type": "long"},  # ID предмета/категории
                             "subjectName": {"type": "text", "analyzer": "standard"},  # Название предмета
-                            "parentId": {"type": "long"},  # ID родительской категории
 
                             # Основные данные товара
                             "brand": {"type": "keyword"},  # Бренд
@@ -414,10 +413,14 @@ class ElasticsearchService(ReconnectableService):
         """Построить Elasticsearch запрос из фильтров"""
         must_clauses = []
 
-        # Динамическое формирование фильтров для любого поля
         for field, value in filters.items():
             if value is not None and value != "":
-                must_clauses.append({"term": {field: value}})
+                if isinstance(value, list):
+                    # Для списков используем terms
+                    must_clauses.append({"terms": {field: value}})
+                else:
+                    # Для одиночных значений используем term
+                    must_clauses.append({"term": {field: value}})
 
         return {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
 
