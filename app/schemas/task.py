@@ -33,7 +33,6 @@ class TaskInfo(BaseModel):
     processed_items: int = Field(0, description="Количество обработанных элементов")
     category_ids: Optional[Dict[str, List[int]]] = Field(None, description="Словарь {category_id: [type_id, ...]} с уникальными type_id для каждой категории (только для products_info)")
     categories_count: Optional[int] = Field(None,description="Количество уникальных категорий (только для products_info)")
-    file_path: Optional[str] = Field(None, description="Путь к файлу с результатами")
     error: Optional[str] = Field(None, description="Сообщение об ошибке")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Дополнительные метаданные")
 

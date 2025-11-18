@@ -98,12 +98,6 @@ class WildberriesClient:
                     await asyncio.sleep(60)
                     continue
 
-            # Сохраняем результаты
-            file_path = await ProductFileService.save_products_to_file(
-                task_info.task_id,
-                all_products
-            )
-
             # Индексируем
             await self.elasticsearch_service.index_products(
                 token=hash_token(token),
@@ -118,12 +112,10 @@ class WildberriesClient:
             task_info.total_items = len(all_products)
             task_info.categories_count = len(category_ids)
             task_info.category_ids = full_category_ids
-            task_info.file_path = file_path
 
             logger.info(
                 f"Сбор товаров завершён: {task_info.task_id}, "
-                f"всего={len(all_products)}, категорий={len(category_ids)}, "
-                f"файл={file_path}"
+                f"всего={len(all_products)}, категорий={len(category_ids)}"
             )
 
         except Exception as e:
