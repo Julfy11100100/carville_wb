@@ -49,14 +49,16 @@ class WildberriesClient:
         return await self.api.get_product(token)
 
     async def collect_products_background(self, token: str, task_info: TaskInfo):
-        """Фоновая задача для получения всех товаров"""
+        """Фоновая задача для получения всех товаров с батч-индексацией"""
         try:
             task_info.status = TaskStatus.RUNNING
             await self.task_manager.save_task(task_info)
 
-            all_products = []
+            batch_products = []
             category_ids: Set[int] = set()
             cursor = {}
+            total_collected = 0
+            batch_size = 1000  # Размер батча для индексации
 
             logger.info(f"Начало сбора товаров: {task_info.task_id}")
 
@@ -75,7 +77,20 @@ class WildberriesClient:
                         if card.get("subjectID")
                     )
 
-                    all_products.extend(cards)
+                    batch_products.extend(cards)
+                    total_collected += len(cards)
+
+                    # Индексируем батч при достижении лимита
+                    if len(batch_products) >= batch_size:
+                        await self.elasticsearch_service.index_products(
+                            token=hash_token(token),
+                            products=batch_products
+                        )
+                        logger.info(
+                            f"Проиндексирован батч: {len(batch_products)} товаров, "
+                            f"всего обработано: {total_collected}"
+                        )
+                        batch_products.clear()  # Очищаем память
 
                     # Обновляем курсор
                     cursor = response.get("cursor", {})
@@ -83,12 +98,13 @@ class WildberriesClient:
                         break
 
                     # Обновляем прогресс
-                    task_info.total_items = len(all_products)
+                    task_info.total_items = total_collected
                     await self.task_manager.save_task(task_info)
 
                     logger.debug(
                         f"Прогресс сбора: {task_info.task_id}, "
-                        f"собрано={len(all_products)}, батч={len(cards)}"
+                        f"собрано={total_collected}, батч={len(cards)}, "
+                        f"в буфере={len(batch_products)}"
                     )
 
                     await asyncio.sleep(0.1)
@@ -98,24 +114,30 @@ class WildberriesClient:
                     await asyncio.sleep(60)
                     continue
 
-            # Индексируем
-            await self.elasticsearch_service.index_products(
-                token=hash_token(token),
-                products=all_products
-            )
+            # Индексируем остатки, если есть
+            if batch_products:
+                await self.elasticsearch_service.index_products(
+                    token=hash_token(token),
+                    products=batch_products
+                )
+                logger.info(
+                    f"Проиндексирован финальный батч: {len(batch_products)} товаров, "
+                    f"всего обработано: {total_collected}"
+                )
+                batch_products.clear()
 
             # Получаем из бд список [{id родительской: id категории}]
             full_category_ids = await self.category_service.get_parents_category_by_id_categories(list(category_ids))
 
             task_info.status = TaskStatus.COMPLETED
             task_info.completed_at = datetime.now()
-            task_info.total_items = len(all_products)
+            task_info.total_items = total_collected
             task_info.categories_count = len(category_ids)
             task_info.category_ids = full_category_ids
 
             logger.info(
                 f"Сбор товаров завершён: {task_info.task_id}, "
-                f"всего={len(all_products)}, категорий={len(category_ids)}"
+                f"всего={total_collected}, категорий={len(category_ids)}"
             )
 
         except Exception as e:
