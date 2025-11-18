@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     DB_DRIVER: str = 'ODBC Driver 17 for SQL Server'
     # Порог 'свежих' категорий из бд. В часах
     WB_TYPES_MAX_AGE_HOURS: int = 24
+    # Параметры устаревших категорий
+    OUTDATED_RECORDS_HOURS: int = 72
+    OUTDATED_RECORDS_MINUTES: int = 0
+
 
     # Elasticsearch настройки
     ELASTICSEARCH_HOST: str = "http://localhost:9200"
@@ -51,6 +55,14 @@ class Settings(BaseSettings):
 
     # Дефолтный токен для получения например дерева категорий
     DEFAULT_WB_TOKEN: str = ""
+
+    # Настройки для поключения к RabbitMQ
+    RABBITMQ_HOST: str = ""
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "admin"
+    RABBITMQ_PASSWORD: str = ""
+    RABBITMQ_VHOST: str = "/"
+    TELEGRAM_NOTIFICATIONS_QUEUE: str = "wb_manager_notifications"
 
     class Config:
         env_file = f"{project_root}/.env"
