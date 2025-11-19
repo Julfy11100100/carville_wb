@@ -156,6 +156,6 @@ class TaskInfoResponse(BaseModel):
             if task.metadata:
                 check_results = task.metadata.get('check_results')
                 if check_results:
-                    data["update_errors"] = check_results.get('error_details')
+                    data["update_errors"] = check_results.get('error_details') or None
 
         return cls.model_construct(**data)
