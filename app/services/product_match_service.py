@@ -14,7 +14,7 @@ class ProductMatchService:
     """Сервис для сопоставления товаров с товарами в БД"""
     COMPARISON_FIELDS_MAP = {
         "type_id": "type_id",
-        "title": "ozon_name"
+        "title": "name"
     }  # процедура в бд ожидает другие имена
 
     def __init__(self, elasticsearch_service: ElasticsearchService, database_service: SQLDatabaseRepository):
@@ -91,7 +91,7 @@ class ProductMatchService:
 
             # 3. Вызываем процедуру сопоставления
             logger.info("Вызов процедуры сопоставления в БД...")
-            # Маппинг поля сравнения для процедуры: 'name' -> 'ozon_name'
+            # Маппинг поля сравнения для процедуры: 'name' -> 'name'
             comparison_field_for_proc = self.COMPARISON_FIELDS_MAP[comparison_field]
             if comparison_field_for_proc != comparison_field:
                 logger.info(
@@ -117,7 +117,7 @@ class ProductMatchService:
 
             logger.info(f"Процедура вернула {len(procedure_results)} результатов")
 
-            # Построим индекс по значению поля сопоставления из Elasticsearch: {ozon_match_value -> [product, ...]}
+            # Построим индекс по значению поля сопоставления из Elasticsearch: {match_value -> [product, ...]}
             # Храним списком на случай дубликатов (штрихкоды и т.п.)
             es_index: Dict[str, List[Dict[str, Any]]] = {}
             for product in products:
@@ -239,18 +239,18 @@ class ProductMatchService:
             logger.error(f"Ошибка при получении товаров из Elasticsearch: {str(e)}")
             raise DatabaseError(f"Elasticsearch operation failed: {str(e)}")
 
-    def _prepare_values(self, products: List[Dict[str, Any]], ozon_match_field: str) -> List[Dict[str, str]]:
+    def _prepare_values(self, products: List[Dict[str, Any]], match_field: str) -> List[Dict[str, str]]:
         """Подготовить список уникальных значений для процедуры"""
 
         unique_values = set()
 
         for product in products:
-            value = product.get(ozon_match_field)
+            value = product.get(match_field)
             if value is not None and str(value).strip():
                 unique_values.add(str(value).strip())
 
-        # Формируем список в формате [{"ozon_val": value}, ...]
-        values = [{"ozon_val": value} for value in sorted(unique_values)]
+        # Формируем список в формате [{"val": value}, ...]
+        values = [{"val": value} for value in sorted(unique_values)]
 
         logger.info(f"Подготовлено {len(values)} уникальных значений из {len(products)} товаров")
 
@@ -274,12 +274,12 @@ class ProductMatchService:
         # Формируем вызов процедуры
         # Явно указываем базу данных из конфига, чтобы избежать контекстных несоответствий
         procedure_call = f"""
-        EXEC [{settings.DB_NAME}]..[aip_ozon_comparation]
+        EXEC [{settings.DB_NAME}]..[aip_market_comparation]
             @Site = 'wb',
-            @Brand = ?,
+            @Brand = NULL,
             @Carville_match_field = ?,
             @Comparison_field = ?,
-            @Ozon_val = ?
+            @Values = ?
         """
 
         try:
@@ -291,12 +291,11 @@ class ProductMatchService:
                     logger.info(f"   Brand: {brand_str}")
                     logger.info(f"   Carville_match_field: {carville_match_field}")
                     logger.info(f"   Comparison_field: {comparison_field}")
-                    logger.info(f"   Ozon_val count: {len(values)}")
+                    logger.info(f"   Values count: {len(values)}")
 
                     await cursor.execute(
                         procedure_call,
                         (
-                            brand_str,
                             carville_match_field,
                             comparison_field,
                             values_json
