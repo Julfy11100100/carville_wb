@@ -133,23 +133,29 @@ class TaskInfoResponse(BaseModel):
 
     @classmethod
     def from_task_info(cls, task: TaskInfo) -> "TaskInfoResponse":
-        result = cls(
-            task_id=task.task_id,
-            task_type=task.task_type.value,
-            status=task.status.value,
-            created_at=task.created_at.isoformat(),
-            completed_at=task.completed_at.isoformat() if task.completed_at else None,
-            products_count=task.total_items,
-            error=task.error
-        )
-        if task.task_type == TaskType.PRODUCTS_INFO:
-            result.category_ids = task.category_ids if task.category_ids else None
-            result.categories_count = task.categories_count if task.categories_count else None
+        data = {
+            "task_id": task.task_id,
+            "task_type": task.task_type.value,
+            "status": task.status.value,
+            "created_at": task.created_at.isoformat(),
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            "products_count": task.total_items,
+            "error": task.error,
+            "category_ids": None,
+            "categories_count": None,
+            "processed_items": None,
+            "update_errors": None,
+        }
 
+        if task.task_type == TaskType.PRODUCTS_INFO:
+            data["category_ids"] = task.category_ids
+            data["categories_count"] = task.categories_count
 
         elif task.task_type == TaskType.PRODUCT_UPDATE:
-            result.processed_items = task.processed_items if task.processed_items else None
-            result.update_errors = task.metadata.get('check_results', {}).get(
-                'error_details') if task.metadata else None
+            data["processed_items"] = task.processed_items
+            if task.metadata:
+                check_results = task.metadata.get('check_results')
+                if check_results:
+                    data["update_errors"] = check_results.get('error_details')
 
-        return result
+        return cls.model_construct(**data)
