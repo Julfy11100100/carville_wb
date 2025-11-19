@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Set
 from app.exceptions.wb_api import WildberriesRateLimitError
 from app.schemas.task import TaskStatus, TaskInfo
 from app.services.elasticsearch_service import ElasticsearchService
-from app.services.product_file_service import ProductFileService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
 from app.services.wb_api import WildberriesAPI
@@ -368,7 +367,6 @@ class WildberriesClient:
                 task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
                 task_info.metadata["final_error_count"] = len(error_nm_ids)
                 task_info.metadata["final_success_count"] = len(success_nm_ids)
-                task_info.metadata["error_details"] = result.get("error_details", {})
 
                 logger.warning(
                     f"Обновление {task_info.task_id} завершено с ошибками: "

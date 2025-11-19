@@ -1,3 +1,5 @@
+from typing import List
+
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
 
@@ -6,7 +8,7 @@ from app.exceptions.task import TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
 from app.schemas.product_match import ProductMatchRequest, ProductListMatchResponse, ProductMatchResponse
 from app.schemas.product_update import ProductUpdateRequest
-from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse
+from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse, TaskInfoResponse
 from app.services.product_match_service import ProductMatchService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
@@ -285,7 +287,8 @@ async def create_products_update_task(
     - `task_type`: Фильтр по типу задачи (обязательно)\n
     - `status`: Фильтр по статусу (опционально)\n
     - `period`: Период в формате: 1h, 2d, 3w (опционально). Примеры: '1h' (последний час), '2d' (последние 2 дня), '3w' (последние 3 недели)
-    """
+    """,
+    response_model=List[TaskInfoResponse]
 )
 @inject
 async def search_tasks(
@@ -309,20 +312,7 @@ async def search_tasks(
         if not tasks:
             return []
 
-        return [
-            {
-                "task_id": task.task_id,
-                "task_type": task.task_type.value,
-                "status": task.status.value,
-                "created_at": task.created_at.isoformat(),
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                "products_count": task.total_items,
-                "category_ids": task.category_ids if task.category_ids else None,
-                "categories_count": task.categories_count,
-                "error": task.error
-            }
-            for task in tasks
-        ]
+        return [TaskInfoResponse.from_task_info(task) for task in tasks]
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при поиске задач: {e}", exc_info=True)

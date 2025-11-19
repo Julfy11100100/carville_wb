@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Optional, Dict, List
 
-from pydantic import BaseModel, Field, field_validator, computed_field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TaskStatus(str, Enum):
@@ -29,11 +29,17 @@ class TaskInfo(BaseModel):
     status: TaskStatus = Field(..., description="Текущий статус задачи")
     created_at: datetime = Field(..., description="Время создания задачи")
     completed_at: Optional[datetime] = Field(None, description="Время завершения задачи")
-    total_items: int = Field(0, description="Общее количество элементов")
-    processed_items: int = Field(0, description="Количество обработанных элементов")
-    category_ids: Optional[Dict[str, List[int]]] = Field(None, description="Словарь {category_id: [type_id, ...]} с уникальными type_id для каждой категории (только для products_info)")
-    categories_count: Optional[int] = Field(None,description="Количество уникальных категорий (только для products_info)")
     error: Optional[str] = Field(None, description="Сообщение об ошибке")
+    total_items: int = Field(0, description="Общее количество элементов")
+
+    # Для задачи получения карточек
+    category_ids: Optional[Dict[str, List[int]]] = Field(None,
+                                                         description="Словарь {category_id: [type_id, ...]} с уникальными type_id для каждой категории (только для products_info)")
+    categories_count: Optional[int] = Field(None,
+                                            description="Количество уникальных категорий (только для products_info)")
+
+    # Для задачи обновления карточки
+    processed_items: int = Field(0, description="Количество обработанных элементов")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Дополнительные метаданные")
 
     @field_validator('task_id')
@@ -109,3 +115,41 @@ class TaskCreateResponse(BaseModel):
     task_type: TaskType = Field(..., description="Тип созданной задачи")
     status: TaskStatus = Field(..., description="Начальный статус задачи")
     message: str = Field(..., description="Информационное сообщение о следующих шагах")
+
+
+class TaskInfoResponse(BaseModel):
+    """Response schema для фронтенда"""
+    task_id: str
+    task_type: str
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    products_count: int
+    category_ids: Optional[Dict[str, List[int]]] = None
+    categories_count: Optional[int] = None
+    error: Optional[str] = None
+    update_errors: Optional[Dict[int, Any]] = None
+    processed_items: Optional[int] = None
+
+    @classmethod
+    def from_task_info(cls, task: TaskInfo) -> "TaskInfoResponse":
+        result = cls(
+            task_id=task.task_id,
+            task_type=task.task_type.value,
+            status=task.status.value,
+            created_at=task.created_at.isoformat(),
+            completed_at=task.completed_at.isoformat() if task.completed_at else None,
+            products_count=task.total_items,
+            error=task.error
+        )
+        if task.task_type == TaskType.PRODUCTS_INFO:
+            result.category_ids = task.category_ids if task.category_ids else None
+            result.categories_count = task.categories_count if task.categories_count else None
+
+
+        elif task.task_type == TaskType.PRODUCT_UPDATE:
+            result.processed_items = task.processed_items if task.processed_items else None
+            result.update_errors = task.metadata.get('check_results', {}).get(
+                'error_details') if task.metadata else None
+
+        return result
