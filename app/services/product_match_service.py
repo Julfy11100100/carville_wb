@@ -24,7 +24,7 @@ class ProductMatchService:
     async def match_products(
             self,
             token: str,
-            wb_match_field: str,
+            match_field: str,
             carville_match_field: str,
             categories: List[int],
             comparison_field: str,
@@ -35,7 +35,7 @@ class ProductMatchService:
 
         Args:
             token: token клиента
-            wb_match_field: Поле для сопоставления в WB (например, 'nmId', 'barcode')
+            match_field: Поле для сопоставления в WB (например, 'VendorCode')
             carville_match_field: Поле для сопоставления в БД (например, 'code', 'bar_code')
             categories: Список категорий
             comparison_field: Поле для сравнения (например, 'type_id', 'name')
@@ -46,7 +46,7 @@ class ProductMatchService:
         try:
             logger.info(f"Начало сопоставления товаров для клиента {token}...")
             logger.info(
-                f"Параметры: wb_match_field='{wb_match_field}', db_field='{carville_match_field}', "
+                f"Параметры: match_field='{match_field}', db_field='{carville_match_field}', "
                 f"categories={categories}, comparison_field='{comparison_field}', brand='{brand}'"
             )
 
@@ -55,7 +55,7 @@ class ProductMatchService:
             products = await self._get_products_from_elasticsearch(
                 token=token,
                 categories=categories,
-                wb_match_field=wb_match_field,
+                match_field=match_field,
                 comparison_field=comparison_field
             )
 
@@ -75,7 +75,7 @@ class ProductMatchService:
 
             # 2. Подготавливаем список
             logger.info("Подготовка списка значений...")
-            values = self._prepare_values(products, wb_match_field)
+            values = self._prepare_values(products, match_field)
 
             if not values:
                 logger.warning("Уникальные значения для сопоставления не найдены")
@@ -121,7 +121,7 @@ class ProductMatchService:
             # Храним списком на случай дубликатов (штрихкоды и т.п.)
             es_index: Dict[str, List[Dict[str, Any]]] = {}
             for product in products:
-                val = product.get(wb_match_field)
+                val = self._get_match_value(product, match_field)
                 if val is None:
                     continue
                 key = str(val).strip()
@@ -206,14 +206,19 @@ class ProductMatchService:
             self,
             token: str,
             categories: List[int],
-            wb_match_field: str,
+            match_field: str,
             comparison_field: str
     ) -> List[Dict[str, Any]]:
         """Получить товары из Elasticsearch по категории"""
 
         # Определяем поля для запроса
-        fields_to_fetch = ["nmID", wb_match_field, comparison_field]
+        fields_to_fetch = ["nmID", comparison_field]
 
+        # Добавляем match_field\characteristics
+        if match_field.startswith("characteristics"):
+            fields_to_fetch.append("characteristics")
+        else:
+            fields_to_fetch.append(match_field)
         # Убираем дубликаты полей
         fields_to_fetch = list(set(fields_to_fetch))
 
@@ -245,7 +250,7 @@ class ProductMatchService:
         unique_values = set()
 
         for product in products:
-            value = product.get(match_field)
+            value = self._get_match_value(product, match_field)
             if value is not None and str(value).strip():
                 unique_values.add(str(value).strip())
 
@@ -337,3 +342,34 @@ class ProductMatchService:
         except Exception as e:
             logger.error(f"Ошибка при выполнении хранимой процедуры: {str(e)}")
             raise DatabaseError(f"Database procedure execution failed: {str(e)}")
+
+    def _get_match_value(self, product: Dict[str, Any], match_field: str) -> Optional[str]:
+        """
+        Получить значение для матчинга из документа Elasticsearch.
+        """
+        try:
+            # Матчинг по плоскому полю
+            if not isinstance(match_field, str) or not match_field.startswith("characteristics_"):
+                return product.get(match_field)
+
+            # Матчинг по атрибуту: ожидаем формат 'characteristics_<id>'
+            parts = match_field.split("_", 1)
+            if len(parts) != 2:
+                return None
+            characteristic_id_str = parts[1]
+            if not characteristic_id_str.isdigit():
+                return None
+            target_id = int(characteristic_id_str)
+
+            characteristics = product.get("characteristics") or []
+            for characteristic in characteristics:
+                if not isinstance(characteristic, dict):
+                    continue
+                if characteristic.get("id") == target_id:
+                    values = characteristic.get("value") or []
+                    if values:
+                        return values[0]
+
+            return None
+        except Exception:
+            return None

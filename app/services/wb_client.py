@@ -60,7 +60,8 @@ class WildberriesClient:
             batch_size = 1000  # Размер батча для индексации
 
             logger.info(f"Начало сбора товаров: {task_info.task_id}")
-
+            # Создаём индекс в эластике
+            await self.elasticsearch_service.create_index(hash_token(token))
             while True:
                 try:
                     response = await self.api.get_products_page(token, limit=100, cursor=cursor)

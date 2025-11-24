@@ -1,6 +1,8 @@
+import re
 from typing import List, Union, Optional
 from pydantic import BaseModel, Field, field_validator
-from app.constants.validators import VALID_WB_FIELDS, VALID_CARVILLE_FIELDS, VALID_COMPARISON_FIELDS
+from app.constants.validators import VALID_WB_FIELDS, VALID_CARVILLE_FIELDS, VALID_COMPARISON_FIELDS, \
+    VALID_WB_FIELD_PATTERN
 
 
 class ProductMatchRequest(BaseModel):
@@ -10,16 +12,18 @@ class ProductMatchRequest(BaseModel):
                                 description="Поле по которому будем матчить полученные товары из API с нашими")
     carville_match_field: str = Field(..., description="Поле в нашей БД с которым будем матчить продукты")
     root_category_id: int = Field(...,
-                             description="ID родительской категории товаров которые будем матчить (берём все дочернии)")
+                                  description="ID родительской категории товаров которые будем матчить (берём все дочернии)")
     category_ids: Optional[List[int]] = Field(None, description="Список категорий, необязательный параметр")
     comparison_field: str = Field(..., description="Имя поля которое будем сравнивать у сматченных объектов")
     brand: Optional[int] = Field(None, description="Бренд для фильтрации")
 
     @field_validator('wb_match_field')
     def validate_wb_match_field(cls, v):
-        if v not in VALID_WB_FIELDS:
+        match = re.match(VALID_WB_FIELD_PATTERN, v)
+        if v not in VALID_WB_FIELDS and not match:
             raise ValueError(
-                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)}")
+                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)}\n"
+                f"Либо должен соответствовать паттерну '{VALID_WB_FIELD_PATTERN}'")
         return v
 
     @field_validator('carville_match_field')
@@ -50,6 +54,7 @@ class ProductMatchRequest(BaseModel):
             if category < 0:
                 raise ValueError(f"Поле category в category_ids не может быть отрицательным")
         return v
+
 
 class ProductMatchResponse(BaseModel):
     """Ответ с информацией о сопоставленном товаре"""

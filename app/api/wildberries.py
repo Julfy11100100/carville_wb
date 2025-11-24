@@ -358,7 +358,7 @@ async def match_products(
 
         result = await product_match_service.match_products(
             token=hash_token(token),
-            wb_match_field=request.wb_match_field,
+            match_field=request.wb_match_field,
             carville_match_field=request.carville_match_field,
             categories=categories,
             comparison_field=request.comparison_field,

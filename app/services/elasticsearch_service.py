@@ -188,9 +188,6 @@ class ElasticsearchService(ReconnectableService):
         try:
             index_name = self._get_index_name(token)
 
-            # Создаем индекс если не существует
-            await self.create_index(token)
-
             # Подготавливаем данные для индексации
             actions = []
             for product in products:
@@ -314,7 +311,7 @@ class ElasticsearchService(ReconnectableService):
             if fields:
                 search_body["_source"] = fields
 
-            logger.info(f"Ищем товары дял индекса {index_name} по запросу:{search_body}")
+            logger.info(f"Ищем товары для индекса {index_name} по запросу:{search_body}")
             response = await self.client.search(
                 index=index_name,
                 body=search_body
