@@ -582,7 +582,7 @@ class WildberriesClient:
 
         error_nm_ids = set()
         error_vendor_codes = set()
-        error_details_by_nm_id = {}
+        error_details_by_vendor_codes = {}
 
         for batch in relevant_errors:
             batch_errors = batch.get("errors", {})
@@ -607,9 +607,9 @@ class WildberriesClient:
                     f"Ошибка для vendorCode={vendor_code} (nmID={nm_id}): {errors}"
                 )
 
-                # Сохраняем детали для nmID
-                error_details_by_nm_id[str(nm_id)] = {
-                    "vendor_code": vendor_code,
+                # Сохраняем детали по vendor code
+                error_details_by_vendor_codes[vendor_code] = {
+                    "nm_id": str(nm_id),
                     "subject_id": subject_info.get("id"),
                     "subject_name": subject_info.get("name"),
                     "errors": errors
@@ -631,7 +631,7 @@ class WildberriesClient:
             "success_rate": success_rate,
             "error_nm_ids": error_nm_ids,
             "error_vendor_codes": error_vendor_codes,
-            "error_details": error_details_by_nm_id,
+            "error_details": error_details_by_vendor_codes,
             "error_batches": relevant_errors
         }
 
