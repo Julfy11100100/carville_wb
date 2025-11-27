@@ -337,9 +337,9 @@ async def search_tasks(
      **Параметры запроса:**\n
     - `wb_match_field`: Поле по которому будем матчить полученные товары из API с нашими (обязательно)\n
     - `carville_match_field`: Поле в нашей БД с которым будем матчить продукты (обязательно)\n
-    - `category_id`: ID категории товаров которые будем матчить (обязательно, не может быть отрицательным)\n
     - `comparison_field`: Имя поля которое будем сравнивать у сматченных объектов (обязательно)\n
-    - `brand`: Бренд для фильтрации товаров из WB API (опционально)
+    - `brand`: Бренд для фильтрации товаров из WB API (опционально)\n
+    - `filter`: Фильтр по категориям вида {root_category: [category1, category2]}
     """,
     response_model=ProductListMatchResponse
 )
@@ -352,9 +352,16 @@ async def match_products(
 ):
     try:
         # Обрабатываем категории
-        categories = request.category_ids
-        if not categories:
-            categories = await sql_categories_service.get_categories_by_parent_id(parent_id=request.root_category_id)
+        categories = []
+        for parent_category_id, subcategories in request.filter.items():
+            if not subcategories:
+                # берём все категории по родительской категории
+                categories_by_parent_id = await sql_categories_service.get_categories_by_parent_id(
+                    parent_id=int(parent_category_id)
+                )
+                categories += categories_by_parent_id
+            else:
+                categories += subcategories
 
         result = await product_match_service.match_products(
             token=hash_token(token),

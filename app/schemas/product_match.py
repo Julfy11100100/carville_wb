@@ -1,6 +1,8 @@
 import re
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict
+
 from pydantic import BaseModel, Field, field_validator
+
 from app.constants.validators import VALID_WB_FIELDS, VALID_CARVILLE_FIELDS, VALID_COMPARISON_FIELDS, \
     VALID_WB_FIELD_PATTERN
 
@@ -11,18 +13,17 @@ class ProductMatchRequest(BaseModel):
     wb_match_field: str = Field(...,
                                 description="Поле по которому будем матчить полученные товары из API с нашими")
     carville_match_field: str = Field(..., description="Поле в нашей БД с которым будем матчить продукты")
-    root_category_id: int = Field(...,
-                                  description="ID родительской категории товаров которые будем матчить (берём все дочернии)")
-    category_ids: Optional[List[int]] = Field(None, description="Список категорий, необязательный параметр")
     comparison_field: str = Field(..., description="Имя поля которое будем сравнивать у сматченных объектов")
     brand: Optional[int] = Field(None, description="Бренд для фильтрации")
+    filter: Dict[str, List[int]] = Field(...,
+                                         description="Фильтр по категориям: ключ - ID родительской категории (строка), значение - список подкатегорий (может быть пустым для всех типов категории)")
 
     @field_validator('wb_match_field')
     def validate_wb_match_field(cls, v):
         match = re.match(VALID_WB_FIELD_PATTERN, v)
         if v not in VALID_WB_FIELDS and not match:
             raise ValueError(
-                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)}\n"
+                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)} "
                 f"Либо должен соответствовать паттерну '{VALID_WB_FIELD_PATTERN}'")
         return v
 
@@ -40,19 +41,35 @@ class ProductMatchRequest(BaseModel):
                 f"Недопустимое comparison_field '{v}' Допустимые поля {','.join(VALID_COMPARISON_FIELDS)}")
         return v
 
-    @field_validator('root_category_id')
-    def validate_root_category_id(cls, v):
-        if v < 0:
-            raise ValueError(f"Поле root_category_id не может быть отрицательным")
-        return v
+    @field_validator('filter')
+    def validate_filter(cls, v: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        # Проверка, что словарь не пустой
+        if not v:
+            raise ValueError('Фильтр не может быть пустым')
 
-    @field_validator('category_ids')
-    def validate_category_ids(cls, v):
-        if v is None:
-            return v
-        for category in v:
-            if category < 0:
-                raise ValueError(f"Поле category в category_ids не может быть отрицательным")
+        # Проверка всех значений в списках
+        for parent_category_id, subcategories in v.items():
+
+            try:
+                if int(parent_category_id) < 0:
+                    raise ValueError(
+                        f"Родительская категория должна быть больше 0. "
+                        f"Найдено некорректное значение родительской категории {parent_category_id}"
+                    )
+            except ValueError:
+                raise ValueError(
+                    f"Id родительской категории должно быть числом, получено: {parent_category_id}"
+                )
+
+            # Если список подкатегорий не пустой, проверяем значения
+            if subcategories:
+                for subcategory_id in subcategories:
+                    if subcategory_id <= 0:
+                        raise ValueError(
+                            f"Все ID подкатегорий должны быть больше 0. "
+                            f"Найдено некорректное значение {subcategory_id} в категории '{parent_category_id}'"
+                        )
+
         return v
 
 
