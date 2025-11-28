@@ -1,0 +1,54 @@
+services:
+  wb_mongodb:
+    image: mongo:7.0
+    container_name: wb_mongodb
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      - "${MONGO_PORT}:27017"
+    networks:
+      - ozondvizhcom_marketplace_network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "1"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wb_manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wb_manager
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./${LOG_FOLDER}:/project/${LOG_FOLDER}
+    ports:
+      - "${PORT}:${PORT}"
+    networks:
+      - ozondvizhcom_marketplace_network
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "1"
+    depends_on:
+      wb_mongodb:
+        condition: service_healthy
+
+volumes:
+  mongodb_data:
+
+networks:
+  ozondvizhcom_marketplace_network:
+    external: true
