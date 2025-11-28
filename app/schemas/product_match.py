@@ -79,6 +79,7 @@ class ProductMatchResponse(BaseModel):
     identifier_value: Union[str, int] = Field(..., description="Значение идентификатора для сопоставления")
     carville_value: Union[str, int, list[int]] = Field(..., description="Значение поля в базе данных Carville")
     wb_value: Union[str, int] = Field(..., description="Значение поля в WB")
+    recommend_type: Optional[str] = Field(None, description="Поле Recommend_name_type из БД")
 
 
 class ProductListMatchResponse(ProductMatchRequest):

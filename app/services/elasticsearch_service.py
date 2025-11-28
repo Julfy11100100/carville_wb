@@ -150,6 +150,9 @@ class ElasticsearchService(ReconnectableService):
                             "brand": {"type": "keyword"},  # Бренд
                             "title": {"type": "text", "analyzer": "standard"},  # Название товара
                             "description": {"type": "text", "analyzer": "standard"},  # Описание
+
+                            # Баркоды (массив строк) добавляем вручную.
+                            "barcode": {"type": "keyword"}  # Хранит массив баркодов
                         }
                     }
                 }
@@ -198,6 +201,13 @@ class ElasticsearchService(ReconnectableService):
                         "_id": product.get("nmID")  # Используем nmId как ID документа
                     }
                 }
+                # Добавляем баркоды из size, если есть
+                barcodes = []
+                for size in product.get("sizes", []):
+                    barcodes.extend(size.get("skus", []))
+                if barcodes:
+                    product["barcode"] = barcodes
+
                 actions.append(action_meta)
                 # Добавляем данные документа
                 actions.append(product)

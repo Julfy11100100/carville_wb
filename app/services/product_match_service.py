@@ -13,7 +13,6 @@ logger = get_logger()
 class ProductMatchService:
     """Сервис для сопоставления товаров с товарами в БД"""
     COMPARISON_FIELDS_MAP = {
-        "type_id": "type_id",
         "title": "name"
     }  # процедура в бд ожидает другие имена
 
@@ -38,7 +37,7 @@ class ProductMatchService:
             match_field: Поле для сопоставления в WB (например, 'VendorCode')
             carville_match_field: Поле для сопоставления в БД (например, 'code', 'bar_code')
             categories: Список категорий
-            comparison_field: Поле для сравнения (например, 'type_id', 'name')
+            comparison_field: Поле для сравнения (например, 'name')
             brand: ID бренда для фильтрации (опционально, преобразуется в строку для процедуры)
         Returns:
             Dict с результатами сопоставления
@@ -121,13 +120,15 @@ class ProductMatchService:
             # Храним списком на случай дубликатов (штрихкоды и т.п.)
             es_index: Dict[str, List[Dict[str, Any]]] = {}
             for product in products:
-                val = self._get_match_value(product, match_field)
-                if val is None:
+                values = self._get_match_values(product, match_field)
+                if values is None:
                     continue
-                key = str(val).strip()
-                if not key:
-                    continue
-                es_index.setdefault(key, []).append(product)
+
+                for value in values:
+                    key = str(value).strip()
+                    if not key:
+                        continue
+                    es_index.setdefault(key, []).append(product)
 
             # Пройдём по результатам процедуры и сопоставим с ES по Ident_tov
             matched_count = 0
@@ -135,16 +136,12 @@ class ProductMatchService:
                 try:
                     ident_val_raw = row.get("Ident_tov")
                     recommend_val = row.get("Recommend")
-                    type_id = row.get("Type_id")
-                    category_id = row.get("subjectID")
+                    recommend_type = row.get("Recommend_name_type", None)
                     # Отфильтруем пустые рекомендации, чтобы удовлетворять схеме ответа
                     if ident_val_raw is None or recommend_val is None:
                         continue
                     ident_key = str(ident_val_raw).strip()
                     if not ident_key:
-                        continue
-
-                    if comparison_field == "type_id" and type_id is None:
                         continue
 
                     es_products = es_index.get(ident_key)
@@ -165,25 +162,18 @@ class ProductMatchService:
                                 return v.strip().lower()
                             return v
 
-                        # для типов нужно сравнивать айди типов
-                        recommend_val = type_id if comparison_field == "type_id" else recommend_val
-
                         is_equal = _norm(comparison_val) == _norm(recommend_val)
 
                         if not is_equal:
-
-                            # приводим recommend_val в окончательный тип согласно сравниваемому полю
-                            match comparison_field:
-                                case "type_id":
-                                    recommend_val = [category_id, recommend_val]
-
                             result_products.append({
                                 "nm_id": nmid_val,
                                 "identifier_value": ident_key,
                                 "carville_value": recommend_val,
-                                "wb_value": comparison_val
+                                "wb_value": comparison_val,
+                                "recommend_type": recommend_type
                             })
                             matched_count += 1
+
                 except Exception as map_err:
                     logger.error(f"Ошибка при обработке строки: {map_err}")
                     continue
@@ -250,9 +240,10 @@ class ProductMatchService:
         unique_values = set()
 
         for product in products:
-            value = self._get_match_value(product, match_field)
-            if value is not None and str(value).strip():
-                unique_values.add(str(value).strip())
+            values = self._get_match_values(product, match_field)
+            for value in values:
+                if value is not None:
+                    unique_values.add(value)
 
         # Формируем список в формате [{"val": value}, ...]
         values = [{"val": value} for value in sorted(unique_values)]
@@ -297,6 +288,7 @@ class ProductMatchService:
                     logger.info(f"   Carville_match_field: {carville_match_field}")
                     logger.info(f"   Comparison_field: {comparison_field}")
                     logger.info(f"   Values count: {len(values)}")
+                    logger.info(f"   Values example: {values[:3]}")
 
                     await cursor.execute(
                         procedure_call,
@@ -343,14 +335,20 @@ class ProductMatchService:
             logger.error(f"Ошибка при выполнении хранимой процедуры: {str(e)}")
             raise DatabaseError(f"Database procedure execution failed: {str(e)}")
 
-    def _get_match_value(self, product: Dict[str, Any], match_field: str) -> Optional[str]:
+    @staticmethod
+    def _get_match_values(product: Dict[str, Any], match_field: str) -> Optional[List[str]]:
         """
         Получить значение для матчинга из документа Elasticsearch.
         """
         try:
             # Матчинг по плоскому полю
             if not isinstance(match_field, str) or not match_field.startswith("characteristics_"):
-                return product.get(match_field)
+                field = product.get(match_field)
+                if field:
+                    if isinstance(field, List):
+                        return [str(item).strip() for item in field if item]
+                    return [str(field).strip()]
+                return None
 
             # Матчинг по атрибуту: ожидаем формат 'characteristics_<id>'
             parts = match_field.split("_", 1)
@@ -368,7 +366,7 @@ class ProductMatchService:
                 if characteristic.get("id") == target_id:
                     values = characteristic.get("value") or []
                     if values:
-                        return values[0]
+                        return [str(val).strip() for val in values if val]
 
             return None
         except Exception:
