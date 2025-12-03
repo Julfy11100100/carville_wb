@@ -149,7 +149,7 @@ class WildberriesAPI:
                     )
 
                 # Успешный ответ
-                result = await response.json() if response.content_length else {}
+                result = await response.json() if response.status == 200 else {}
                 logger.debug(f"Запрос выполнен успешно: {endpoint}, статус={response.status}")
                 return result
 

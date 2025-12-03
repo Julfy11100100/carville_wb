@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     OUTDATED_RECORDS_HOURS: int = 72
     OUTDATED_RECORDS_MINUTES: int = 0
 
-
     # Elasticsearch настройки
     ELASTICSEARCH_HOST: str = "http://localhost:9200"
 
@@ -63,6 +62,11 @@ class Settings(BaseSettings):
     RABBITMQ_PASSWORD: str = ""
     RABBITMQ_VHOST: str = "/"
     TELEGRAM_NOTIFICATIONS_QUEUE: str = "wb_manager_notifications"
+
+    # Настройки для работы с отзывами
+    FEEDBACKS_WB_TOKEN: str = ""
+    FEEDBACKS_BASE_URL: str = "https://feedbacks-api.wildberries.ru"
+    FEEDBACKS_ENDPOINT: str = "/api/v1/feedbacks"
 
     class Config:
         env_file = f"{project_root}/.env"

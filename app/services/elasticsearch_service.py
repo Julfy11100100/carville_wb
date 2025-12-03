@@ -88,7 +88,8 @@ class ElasticsearchService(ReconnectableService):
             self._is_connected = False
             await self.ensure_connection()
 
-    def _get_index_name(self, token: str) -> str:
+    @staticmethod
+    def _get_index_name(token: str) -> str:
         """Получить имя индекса для клиента"""
         return f"wb_products_{token}"
 
@@ -96,15 +97,6 @@ class ElasticsearchService(ReconnectableService):
         """Создать индекс для клиента"""
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            # Circuit breaker открыт
-            logger.warning(f"Elasticsearch недоступен для клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return {
-                "status": "error",
-                "error": "Сервис Elasticsearch временно недоступен",
-                "message": f"Не удалось создать индекс для клиента {token}"
-            }
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
             self._record_failure()
@@ -177,11 +169,6 @@ class ElasticsearchService(ReconnectableService):
         """Индексировать товары в Elasticsearch (автоматически вызывается при синхронизации)"""
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            # Circuit breaker открыт
-            logger.warning(f"Elasticsearch недоступен для индексации клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return False
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch для клиента {token}: {str(e)}")
             self._record_failure()
@@ -238,11 +225,6 @@ class ElasticsearchService(ReconnectableService):
         """Удалить все данные клиента из Elasticsearch (вызывается при новой синхронизации)"""
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            # Circuit breaker открыт
-            logger.warning(f"Elasticsearch недоступен для удаления данных клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return False
         except Exception as e:
             logger.warning(f"Не удалось подключиться к Elasticsearch для клиента {token}: {str(e)}")
             self._record_failure()
@@ -270,16 +252,6 @@ class ElasticsearchService(ReconnectableService):
         """Поиск товаров с фильтрацией"""
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            # Circuit breaker открыт
-            logger.warning(f"Elasticsearch недоступен для поиска клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return {
-                "status": "error",
-                "error": "Сервис Elasticsearch временно недоступен",
-                "products": [],
-                "total": 0
-            }
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
             self._record_failure()
@@ -358,15 +330,6 @@ class ElasticsearchService(ReconnectableService):
         """Получить товар по nmId (артикулу WB) со всеми полями"""
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            # Circuit breaker открыт
-            logger.warning(f"Elasticsearch недоступен для получения товара клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return {
-                "status": "error",
-                "error": "Сервис Elasticsearch временно недоступен",
-                "product": None
-            }
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
             self._record_failure()
@@ -450,10 +413,6 @@ class ElasticsearchService(ReconnectableService):
         """
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            logger.warning(f"Elasticsearch недоступен для поиска клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return []
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
             self._record_failure()
@@ -539,15 +498,6 @@ class ElasticsearchService(ReconnectableService):
         """
         try:
             await self._ensure_valid_client()
-        except RuntimeError as e:
-            logger.warning(f"Elasticsearch недоступен для обновления клиента {token}: {str(e)}")
-            self._schedule_background_reconnect()
-            return {
-                "status": "error",
-                "error": "Сервис Elasticsearch временно недоступен",
-                "updated": 0,
-                "failed": 0
-            }
         except Exception as e:
             logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
             self._record_failure()
@@ -635,4 +585,444 @@ class ElasticsearchService(ReconnectableService):
                 "error": str(e),
                 "updated": 0,
                 "failed": len(updates)
+            }
+
+    # ЛОГИКА ДЛЯ ИНДЕКСАЦИИ ОТЗЫВОВ
+    # =========================================================================
+
+    @staticmethod
+    def _get_feedback_index_name(token: str) -> str:
+        """Получить имя индекса для отзывов клиента"""
+        return f"wb_feedbacks_{token}"
+
+    async def create_feedback_index(self, token: str) -> Dict[str, Any]:
+        """Создать индекс для отзывов с оптимальной маппингом"""
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": f"Ошибка подключения: {str(e)}",
+                "message": f"Не удалось создать индекс для отзывов клиента {token}"
+            }
+
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            # Проверяем существует ли индекс
+            exists = await self.client.indices.exists(index=index_name)
+            if exists:
+                return {
+                    "status": "success",
+                    "message": f"Индекс {index_name} уже есть"
+                }
+
+            # Создаём индекс с маппингом для отзывов
+            await self.client.indices.create(
+                index=index_name,
+                body={
+                    "settings": {
+                        "index": {
+                            "max_result_window": 100000,
+                            "number_of_shards": 1,
+                            "number_of_replicas": 0,
+                            "refresh_interval": "60s"
+                        }
+                    },
+                    "mappings": {
+                        "dynamic": False,
+                        "properties": {
+                            # ID отзыва
+                            "id": {"type": "keyword"},
+
+                            # Текст отзыва
+                            "text": {"type": "text", "analyzer": "standard"},
+                            "pros": {"type": "text", "analyzer": "standard"},
+                            "cons": {"type": "text", "analyzer": "standard"},
+
+                            # Оценка
+                            "product_valuation": {"type": "byte"},
+
+                            # Дата создания (для сортировки и фильтрации)
+                            "created_date": {"type": "date"},
+
+                            # Информация о товаре
+                            "product_name": {"type": "text", "analyzer": "standard"},
+                            "vendor_code": {"type": "keyword"},  # supplierArticle
+                            "brand_name": {"type": "keyword"},
+
+                            # Категория
+                            "subject_id": {"type": "long"},
+
+                            # Баркод (lastOrderShkId)
+                            "barcode": {"type": "keyword"},
+
+                            # кол-во фоток\видео
+                            "photos_amount": {"type": "integer"},
+                            "videos_amount": {"type": "integer"},
+
+                            "status": {"type": "keyword"},
+
+                        }
+                    }
+                }
+            )
+
+            logger.info(f"Индекс отзывов {index_name} успешно создан")
+            return {
+                "status": "success",
+                "message": f"Индекс {index_name} успешно создан"
+            }
+
+        except Exception as e:
+            logger.error(f"Не удалось создать индекс отзывов для {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": str(e),
+                "message": f"Не удалось создать индекс отзывов для {token}"
+            }
+
+    async def index_feedbacks(
+            self,
+            token: str,
+            feedbacks: List[Dict[str, Any]]
+    ) -> bool:
+        """Индексировать отзывы в Elasticsearch"""
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch для {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return False
+
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            # Подготавливаем bulk действия
+            actions = []
+            for feedback in feedbacks:
+                # Action metadata
+                action_meta = {
+                    "index": {
+                        "_index": index_name,
+                        "_id": feedback.get("id")
+                    }
+                }
+                actions.append(action_meta)
+                actions.append(feedback)
+
+            # Индексируем батчами
+            batch_size = 2000
+            for i in range(0, len(actions), batch_size):
+                batch = actions[i:i + batch_size]
+                response = await self.client.bulk(body=batch)
+
+                if response.get("errors"):
+                    error_count = len([e for e in response.get('items', [])
+                                       if e.get('index', {}).get('error')])
+                    logger.warning(
+                        f"Ошибки при индексации батча отзывов для {token}: "
+                        f"{error_count} документов"
+                    )
+
+                logger.debug(
+                    f"Проиндексирован батч отзывов {i // batch_size + 1} "
+                    f"для {token}: {len(batch) // 2} отзывов"
+                )
+
+            # Обновляем индекс для немедленной доступности
+            await self.client.indices.refresh(index=index_name)
+
+            logger.info(f"Успешно проиндексировано {len(feedbacks)} отзывов для {token}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Не удалось проиндексировать отзывы для {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return False
+
+    async def get_last_indexed_feedback_date(self, token: str) -> Optional[str]:
+        """Получить дату последнего индексированного отзыва"""
+
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch для {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return None
+
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            response = await self.client.search(
+                index=index_name,
+                body={
+                    "query": {"match_all": {}},
+                    "size": 1,
+                    "sort": [{"created_date": {"order": "desc"}}]
+                }
+            )
+
+            hits = response.get("hits", {}).get("hits", [])
+            if hits:
+                last_date = hits[0]["_source"].get("created_date")
+                logger.debug(f"Последняя дата отзыва для {token}: {last_date}")
+                return last_date
+
+            logger.info(f"Индекс отзывов для {token} пуст")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Не удалось получить последнюю дату для {token}: {str(e)}")
+            return None
+
+    async def search_feedbacks(
+            self,
+            token: str,
+            filters: Dict[str, Any] = None,
+            limit: int = 100,
+            offset: int = 0
+    ) -> Dict[str, Any]:
+        """Поиск отзывов с фильтрацией"""
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": f"Ошибка подключения: {str(e)}",
+                "feedbacks": [],
+                "total": 0
+            }
+
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            # Проверяем существует ли индекс
+            exists = await self.client.indices.exists(index=index_name)
+            if not exists:
+                return {
+                    "status": "error",
+                    "error": f"Данные для клиента {token} не найдены",
+                    "feedbacks": [],
+                    "total": 0
+                }
+
+            # Строим запрос с фильтрами
+            query = self._build_search_query(filters or {})
+
+            search_body = {
+                "query": query,
+                "size": limit,
+                "from": offset
+            }
+
+            logger.info(f"Ищем отзывы для индекса {index_name}")
+            response = await self.client.search(
+                index=index_name,
+                body=search_body
+            )
+
+            # Извлекаем результаты
+            feedbacks = [hit["_source"] for hit in response["hits"]["hits"]]
+
+            return {
+                "status": "success",
+                "feedbacks": feedbacks,
+                "total": response["hits"]["total"]["value"],
+                "limit": limit,
+                "offset": offset
+            }
+
+        except Exception as e:
+            logger.error(f"Не удалось найти отзывы для {token}: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": str(e),
+                "feedbacks": [],
+                "total": 0
+            }
+
+    async def search_feedbacks_by_value(
+            self,
+            token: str,
+            vendor_code: Optional[str] = None,
+            bar_code: Optional[int] = None,
+            size: int = 10000
+    ) -> Dict[str, Any]:
+        """Получить отзывы по vendor_code или barcode"""
+
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(f"Не удалось подключиться к Elasticsearch: {str(e)}")
+            self._record_failure()
+            self._schedule_background_reconnect()
+            return {
+                "status": "error",
+                "error": f"Ошибка подключения: {str(e)}",
+                "feedbacks": [],
+                "total": 0
+            }
+
+        if not vendor_code and not bar_code:
+            return {
+                "feedbacks": [],
+                "total": 0,
+                "avg_rating": None,
+                "ratings": {},
+                "error": "Необходимо указать vendor_code или bar_code"
+            }
+
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            # Строим query
+            must_clauses = []
+            if vendor_code:
+                must_clauses.append({"term": {"vendor_code": vendor_code}})
+            if bar_code:
+                must_clauses.append({"term": {"barcode": bar_code}})
+
+            query = {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
+
+            response = await self.client.search(
+                index=index_name,
+                body={
+                    "query": query,
+                    "size": min(size, 10000),
+                    "sort": [{"created_date": {"order": "desc"}}]
+                }
+            )
+
+            hits = response.get("hits", {})
+            docs = [hit["_source"] for hit in hits.get("hits", [])]
+
+            # Считаем статистику рейтингов
+            ratings = {}
+            ratings_sum = 0
+            ratings_count = 0
+
+            for doc in docs:
+                val = doc.get("product_valuation")
+                if val and isinstance(val, (int, float)):
+                    ratings[str(int(val))] = ratings.get(str(int(val)), 0) + 1
+                    ratings_sum += val
+                    ratings_count += 1
+
+            avg_rating = (ratings_sum / ratings_count) if ratings_count > 0 else None
+
+            total = hits.get("total", {}).get("value", 0)
+
+            logger.info(
+                f"Получены отзывы для {token}: "
+                f"vendor_code={vendor_code}, bar_code={bar_code}, найдено={total}"
+            )
+
+            return {
+                "feedbacks": docs,
+                "total": total,
+                "avg_rating": round(avg_rating, 2) if avg_rating else None,
+                "ratings": ratings
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске отзывов для {token}: {str(e)}")
+            return {
+                "feedbacks": [],
+                "total": 0,
+                "avg_rating": None,
+                "ratings": {},
+                "error": str(e)
+            }
+
+    async def search_feedbacks_by_period(
+            self,
+            token: str,
+            date_from: Optional[str] = None,
+            date_to: Optional[str] = None,
+            size: int = 1000
+    ) -> Dict[str, Any]:
+        """Получить отзывы за период"""
+        try:
+            index_name = self._get_feedback_index_name(token)
+
+            # Строим query с фильтром по датам
+            must_clauses = []
+            if date_from or date_to:
+                range_filter = {}
+                if date_from:
+                    range_filter["gte"] = date_from
+                if date_to:
+                    range_filter["lte"] = date_to
+                must_clauses.append({"range": {"created_date": range_filter}})
+
+            query = {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
+
+            # Сортировка для search_after пагинации
+            sort = [
+                {"created_date": {"order": "desc"}},
+                {"id": {"order": "desc"}}
+            ]
+
+            body = {
+                "query": query,
+                "size": min(size, 1000),
+                "sort": sort
+            }
+
+            response = await self.client.search(
+                index=index_name,
+                body=body
+            )
+
+            hits = response.get("hits", {})
+            docs = [hit["_source"] for hit in hits.get("hits", [])]
+
+            total = hits.get("total", {}).get("value", 0)
+            has_next = len(docs) == min(size, 1000)
+
+            # Генерируем следующий курсор
+            next_cursor = None
+            if has_next and docs:
+                import json
+                import base64
+                last_doc = response["hits"]["hits"][-1]
+                search_after = last_doc["sort"]
+                next_cursor = base64.b64encode(
+                    json.dumps(search_after).encode()
+                ).decode()
+
+            logger.info(
+                f"Получены отзывы за период для {token}: "
+                f"найдено={total}, на странице={len(docs)}, has_next={has_next}"
+            )
+
+            return {
+                "feedbacks": docs,
+                "total": total,
+                "has_next": has_next,
+                "next_cursor": next_cursor
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении отзывов за период для {token}: {str(e)}")
+            return {
+                "feedbacks": [],
+                "total": 0,
+                "has_next": False,
+                "next_cursor": None,
+                "error": str(e)
             }

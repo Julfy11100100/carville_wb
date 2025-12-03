@@ -9,6 +9,7 @@ class EntityType(str, Enum):
     SYSTEM = "system"  # Система: "⚙️"
     FILE = "file"  # Файл: "📄"
     TASK = "task"  # Задача: "📋"
+    REVIEWS = "reviews"
 
 
 # Доступные типы действий
