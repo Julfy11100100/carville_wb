@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Set
 
+from app.constants.brands import BRANDS
 from app.exceptions.wb_api import WildberriesRateLimitError
 from app.schemas.task import TaskStatus, TaskInfo
 from app.services.elasticsearch_service import ElasticsearchService
@@ -66,6 +67,8 @@ class WildberriesClient:
                 try:
                     response = await self.api.get_products_page(token, limit=100, cursor=cursor)
                     cards = response.get("cards", [])
+
+                    cards = [card for card in cards if card.get("brand", None) in BRANDS]
 
                     if not cards:
                         break

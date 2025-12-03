@@ -1,7 +1,7 @@
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from app.exceptions.sql_database import DatabaseError
 from app.schemas.wb_types import WbTypesTreeResponse, CategoryResponse, WbTypeResponse
@@ -419,8 +419,13 @@ class SqlCategoryService:
 
         return WbTypesTreeResponse(root_categories=root_categories)
 
-    async def get_parents_category_by_id_categories(self, categories_ids: List[int]) -> Dict[str, List[int]]:
+    async def get_parents_category_by_id_categories(self, categories_ids: List[int]) -> Optional[Dict[str, List[int]]]:
         """Получить словарь [{id родительской категории -> id категории}]"""
+
+        if not categories_ids:
+            logger.info(f"Отсутствуют категории в categories_ids")
+            return None
+
         query = f"""
             SELECT 
 	            p.type_id AS parent_id,
