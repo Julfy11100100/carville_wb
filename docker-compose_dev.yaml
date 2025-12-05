@@ -68,6 +68,8 @@ services:
       options:
         max-size: "10m"
         max-file: "1"
+    stdin_open: true
+    tty: true
     depends_on:
       elasticsearch:
         condition: service_healthy

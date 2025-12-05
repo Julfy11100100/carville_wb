@@ -859,7 +859,7 @@ class ElasticsearchService(ReconnectableService):
             self,
             token: str,
             vendor_code: Optional[str] = None,
-            bar_code: Optional[int] = None,
+            barcode: Optional[int] = None,
             size: int = 10000
     ) -> Dict[str, Any]:
         """Получить отзывы по vendor_code или barcode"""
@@ -877,13 +877,13 @@ class ElasticsearchService(ReconnectableService):
                 "total": 0
             }
 
-        if not vendor_code and not bar_code:
+        if not vendor_code and not barcode:
             return {
                 "feedbacks": [],
                 "total": 0,
                 "avg_rating": None,
                 "ratings": {},
-                "error": "Необходимо указать vendor_code или bar_code"
+                "error": "Необходимо указать vendor_code или barcode"
             }
 
         try:
@@ -893,8 +893,8 @@ class ElasticsearchService(ReconnectableService):
             must_clauses = []
             if vendor_code:
                 must_clauses.append({"term": {"vendor_code": vendor_code}})
-            if bar_code:
-                must_clauses.append({"term": {"barcode": bar_code}})
+            if barcode:
+                must_clauses.append({"term": {"barcode": barcode}})
 
             query = {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
 
@@ -928,7 +928,7 @@ class ElasticsearchService(ReconnectableService):
 
             logger.info(
                 f"Получены отзывы для {token}: "
-                f"vendor_code={vendor_code}, bar_code={bar_code}, найдено={total}"
+                f"vendor_code={vendor_code}, barcode={barcode}, найдено={total}"
             )
 
             return {

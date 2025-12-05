@@ -17,6 +17,8 @@ services:
       options:
         max-size: "10m"
         max-file: "1"
+    stdin_open: true
+    tty: true
 
 networks:
   dev_marketplace_network:

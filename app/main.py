@@ -8,9 +8,10 @@ from fastapi.responses import JSONResponse
 
 from app.api import router, wildberries, categories, feedbacks
 from app.containers import Container
-from app.utils.logging import get_logger
+from app.utils.logging import get_logger, setup_logging
 from config import settings
 
+setup_logging()
 logger = get_logger()
 
 container = Container()

@@ -246,14 +246,14 @@ class FeedbackService:
             self,
             token: str,
             vendor_code: Optional[str] = None,
-            bar_code: Optional[int] = None,
+            barcode: Optional[int] = None,
             size: int = 10000
     ) -> Dict[str, Any]:
         """Получить отзывы по vendor_code или bar_code"""
         return await self.es.search_feedbacks_by_value(
             token=hash_token(token),
             vendor_code=vendor_code,
-            bar_code=bar_code,
+            barcode=barcode,
             size=size
         )
 

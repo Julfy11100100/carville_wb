@@ -7,9 +7,10 @@ from app.services.rabbitmq import RabbitMQService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.sql_repository import SQLDatabaseRepository
 from app.services.wb_api import WildberriesAPI
-from app.utils.logging import get_logger
+from app.utils.logging import get_logger, setup_logging
 from config import settings
 
+setup_logging()
 logger = get_logger()
 
 

@@ -31,10 +31,10 @@ def get_wb_admin_token(x_wb_token: str = Header(..., description="WB API ток�
 
 
 @router.post(
-    "/list",
+    "/by-value",
     tags=["feedbacks"],
-    summary="Получить отзывы за период",
-    description="Админский эндпоинт. Возвращает список отзывов за указанный период по полю createdDate.",
+    summary="Получить отзывы по значению",
+    description="Админский эндпоинт. Возвращает список отзывов по полям barcode|vendor_code",
     response_model=FeedbackByValueResponse
 )
 @inject
@@ -47,7 +47,7 @@ async def get_feedbacks_by_value(
         return await feedback_service.get_feedbacks_by_value(
             token=token,
             vendor_code=request.vendor_code,
-            bar_code=request.barcode
+            barcode=request.barcode
         )
 
     except Exception as e:

@@ -39,8 +39,8 @@ class FeedbackByValueRequest(BaseModel):
     @model_validator(mode='after')
     def validate_exactly_one_parameter(self):
         """Проверяет, что передан ровно один из параметров: vendor_code или barcode"""
-        has_vendor_code = bool(self.vendor_code and str(self.vendor_code).strip())
-        has_barcode = bool(self.barcode and str(self.barcode).strip())
+        has_vendor_code = self.vendor_code is not None and str(self.vendor_code).strip()
+        has_barcode = self.barcode is not None
 
         if has_vendor_code and has_barcode:
             raise ValueError("Нельзя одновременно передавать vendor_code и barcode. Укажите только один из параметров.")

@@ -1,15 +1,15 @@
 import logging
 import os
-from datetime import datetime
-from pathlib import Path
+import sys
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
+
 from config import settings
 
 
 class ColoredFormatter(logging.Formatter):
     """Форматер с цветным выводом в консоль"""
 
-    # ANSI коды цветов
     COLORS = {
         'DEBUG': '\033[36m',  # Cyan
         'INFO': '\033[92m',  # Green
@@ -20,66 +20,80 @@ class ColoredFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
-        # Получаем цвет по уровню логирования
         color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
-
-        # Форматируем сообщение
         formatted = super().format(record)
-
-        # Добавляем цвет
         return f"{color}{formatted}{self.COLORS['RESET']}"
 
 
-def get_logger(name: str = None) -> logging.Logger:
-    # Определяем имя логгера
-    if name is None:
-        import inspect
-        caller_frame = inspect.stack()[1]
-        name = os.path.basename(caller_frame.filename).replace('.py', '')
+_logging_configured = False  # Флаг, что логирование настроено
 
-    logger = logging.getLogger(name)
 
-    # Пропускаем, если логгер уже настроен
-    if logger.handlers:
-        return logger
+def setup_logging():
+    """Глобальная настройка логирования (вызовите один раз в main)"""
 
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
+    global _logging_configured
 
-    # Создаём директорию логов
+    # Пропускаем, если уже настроено
+    if _logging_configured:
+        return
+
+    _logging_configured = True
+
     log_dir = Path(settings.LOG_FOLDER)
-    log_dir.mkdir(exist_ok=True)
+    log_dir.mkdir(exist_ok=True, parents=True)
 
-    log_file = log_dir / f"{datetime.now().strftime('%Y-%m-%d')}.log"
-
-    # Форматер для файла (без цветов)
     file_formatter = logging.Formatter(
         fmt='%(asctime)s | %(levelname)-8s | %(name)s - %(message)s',
         datefmt='%H:%M:%S'
     )
 
-    # Форматер для консоли (с цветами)
     console_formatter = ColoredFormatter(
         fmt='%(asctime)s | %(levelname)-8s | %(name)s - %(message)s',
         datefmt='%H:%M:%S'
     )
 
+    log_file = log_dir / "app.log"
+
     # Файловый handler (ротация по дням)
     file_handler = TimedRotatingFileHandler(
-        filename=log_file,
+        filename=str(log_file),
         when='midnight',
         interval=1,
-        backupCount=30,
+        backupCount=365,
         encoding='utf-8'
     )
+    file_handler.suffix = "%Y-%m-%d"
     file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
 
     # Консольный handler (с цветами)
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
 
-    logger.propagate = False
+    # Настраиваем логгер приложения (только app.*)
+    app_logger = logging.getLogger('app')
+    app_logger.setLevel(logging.DEBUG)
+    app_logger.propagate = False
 
-    return logger
+    # Удаляем старые handlers перед добавлением новых
+    for handler in app_logger.handlers[:]:
+        app_logger.removeHandler(handler)
+
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(console_handler)
+
+    # Корневой логгер — только WARNING (чтобы не было шума от сторонних библиотек)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+
+
+def get_logger(name: str = None) -> logging.Logger:
+    """Получить логгер с указанным или автоматическим именем"""
+
+    if name is None:
+        import inspect
+        caller_frame = inspect.stack()[1]
+        filename = os.path.basename(caller_frame.filename).replace('.py', '')
+        # Возвращаем логгер с префиксом 'app.'
+        name = f'app.{filename}'
+
+    return logging.getLogger(name)
