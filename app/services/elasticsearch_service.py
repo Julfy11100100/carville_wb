@@ -591,11 +591,11 @@ class ElasticsearchService(ReconnectableService):
     # =========================================================================
 
     @staticmethod
-    def _get_feedback_index_name(token: str) -> str:
+    def _get_review_index_name(token: str) -> str:
         """Получить имя индекса для отзывов клиента"""
-        return f"wb_feedbacks_{token}"
+        return f"wb_reviews_{token}"
 
-    async def create_feedback_index(self, token: str) -> Dict[str, Any]:
+    async def create_review_index(self, token: str) -> Dict[str, Any]:
         """Создать индекс для отзывов с оптимальной маппингом"""
         try:
             await self._ensure_valid_client()
@@ -610,7 +610,7 @@ class ElasticsearchService(ReconnectableService):
             }
 
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             # Проверяем существует ли индекс
             exists = await self.client.indices.exists(index=index_name)
@@ -687,10 +687,10 @@ class ElasticsearchService(ReconnectableService):
                 "message": f"Не удалось создать индекс отзывов для {token}"
             }
 
-    async def index_feedbacks(
+    async def index_reviews(
             self,
             token: str,
-            feedbacks: List[Dict[str, Any]]
+            reviews: List[Dict[str, Any]]
     ) -> bool:
         """Индексировать отзывы в Elasticsearch"""
         try:
@@ -702,20 +702,20 @@ class ElasticsearchService(ReconnectableService):
             return False
 
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             # Подготавливаем bulk действия
             actions = []
-            for feedback in feedbacks:
+            for review in reviews:
                 # Action metadata
                 action_meta = {
                     "index": {
                         "_index": index_name,
-                        "_id": feedback.get("id")
+                        "_id": review.get("id")
                     }
                 }
                 actions.append(action_meta)
-                actions.append(feedback)
+                actions.append(review)
 
             # Индексируем батчами
             batch_size = 2000
@@ -739,7 +739,7 @@ class ElasticsearchService(ReconnectableService):
             # Обновляем индекс для немедленной доступности
             await self.client.indices.refresh(index=index_name)
 
-            logger.info(f"Успешно проиндексировано {len(feedbacks)} отзывов для {token}")
+            logger.info(f"Успешно проиндексировано {len(reviews)} отзывов для {token}")
             return True
 
         except Exception as e:
@@ -748,7 +748,7 @@ class ElasticsearchService(ReconnectableService):
             self._schedule_background_reconnect()
             return False
 
-    async def get_last_indexed_feedback_date(self, token: str) -> Optional[str]:
+    async def get_last_indexed_review_date(self, token: str) -> Optional[str]:
         """Получить дату последнего индексированного отзыва"""
 
         try:
@@ -760,7 +760,7 @@ class ElasticsearchService(ReconnectableService):
             return None
 
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             response = await self.client.search(
                 index=index_name,
@@ -784,7 +784,7 @@ class ElasticsearchService(ReconnectableService):
             logger.warning(f"Не удалось получить последнюю дату для {token}: {str(e)}")
             return None
 
-    async def search_feedbacks(
+    async def search_reviews(
             self,
             token: str,
             filters: Dict[str, Any] = None,
@@ -801,12 +801,12 @@ class ElasticsearchService(ReconnectableService):
             return {
                 "status": "error",
                 "error": f"Ошибка подключения: {str(e)}",
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0
             }
 
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             # Проверяем существует ли индекс
             exists = await self.client.indices.exists(index=index_name)
@@ -814,7 +814,7 @@ class ElasticsearchService(ReconnectableService):
                 return {
                     "status": "error",
                     "error": f"Данные для клиента {token} не найдены",
-                    "feedbacks": [],
+                    "reviews": [],
                     "total": 0
                 }
 
@@ -834,11 +834,11 @@ class ElasticsearchService(ReconnectableService):
             )
 
             # Извлекаем результаты
-            feedbacks = [hit["_source"] for hit in response["hits"]["hits"]]
+            reviews = [hit["_source"] for hit in response["hits"]["hits"]]
 
             return {
                 "status": "success",
-                "feedbacks": feedbacks,
+                "reviews": reviews,
                 "total": response["hits"]["total"]["value"],
                 "limit": limit,
                 "offset": offset
@@ -851,11 +851,11 @@ class ElasticsearchService(ReconnectableService):
             return {
                 "status": "error",
                 "error": str(e),
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0
             }
 
-    async def search_feedbacks_by_value(
+    async def search_reviews_by_value(
             self,
             token: str,
             vendor_code: Optional[str] = None,
@@ -873,13 +873,13 @@ class ElasticsearchService(ReconnectableService):
             return {
                 "status": "error",
                 "error": f"Ошибка подключения: {str(e)}",
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0
             }
 
         if not vendor_code and not barcode:
             return {
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0,
                 "avg_rating": None,
                 "ratings": {},
@@ -887,7 +887,7 @@ class ElasticsearchService(ReconnectableService):
             }
 
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             # Строим query
             must_clauses = []
@@ -932,7 +932,7 @@ class ElasticsearchService(ReconnectableService):
             )
 
             return {
-                "feedbacks": docs,
+                "reviews": docs,
                 "total": total,
                 "avg_rating": round(avg_rating, 2) if avg_rating else None,
                 "ratings": ratings
@@ -941,14 +941,14 @@ class ElasticsearchService(ReconnectableService):
         except Exception as e:
             logger.error(f"Ошибка при поиске отзывов для {token}: {str(e)}")
             return {
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0,
                 "avg_rating": None,
                 "ratings": {},
                 "error": str(e)
             }
 
-    async def search_feedbacks_by_period(
+    async def search_reviews_by_period(
             self,
             token: str,
             date_from: Optional[str] = None,
@@ -957,7 +957,7 @@ class ElasticsearchService(ReconnectableService):
     ) -> Dict[str, Any]:
         """Получить отзывы за период"""
         try:
-            index_name = self._get_feedback_index_name(token)
+            index_name = self._get_review_index_name(token)
 
             # Строим query с фильтром по датам
             must_clauses = []
@@ -1011,7 +1011,7 @@ class ElasticsearchService(ReconnectableService):
             )
 
             return {
-                "feedbacks": docs,
+                "reviews": docs,
                 "total": total,
                 "has_next": has_next,
                 "next_cursor": next_cursor
@@ -1020,7 +1020,7 @@ class ElasticsearchService(ReconnectableService):
         except Exception as e:
             logger.error(f"Ошибка при получении отзывов за период для {token}: {str(e)}")
             return {
-                "feedbacks": [],
+                "reviews": [],
                 "total": 0,
                 "has_next": False,
                 "next_cursor": None,

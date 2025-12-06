@@ -2,15 +2,13 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header
 
 from app.containers import Container
-from app.exceptions.wb_api import WildberriesAPIError
-from app.schemas.feedbacks import FeedbackByValueRequest, FeedbackByValueResponse
-from app.services.feedback_service import FeedbackService
-from app.services.wb_client import WildberriesClient
+from app.schemas.reviews import ReviewByValueRequest, ReviewByValueResponse
+from app.services.review_service import ReviewService
 from app.utils.logging import get_logger
 from config import settings
 
 logger = get_logger()
-router = APIRouter()
+router = APIRouter(prefix="/reviews")
 
 
 def get_wb_admin_token(x_wb_token: str = Header(..., description="WB API токен")) -> str:
@@ -19,32 +17,32 @@ def get_wb_admin_token(x_wb_token: str = Header(..., description="WB API ток�
         logger.warning("Токен WB API отсутствует в запросе")
         raise HTTPException(
             status_code=401,
-            detail="Требуется токен WB API FEEDBACKS в заголовке X-WB-Token"
+            detail="Требуется токен WB API REVIEWS в заголовке X-WB-Token"
         )
-    if x_wb_token != settings.FEEDBACKS_WB_TOKEN:
+    if x_wb_token != settings.REVIEWS_WB_TOKEN:
         logger.warning(f"Токен WB API не является админским")
         raise HTTPException(
             status_code=403,
-            detail="Требуется админский токен WB API FEEDBACKS"
+            detail="Требуется админский токен WB API REVIEWS"
         )
     return x_wb_token
 
 
 @router.post(
     "/by-value",
-    tags=["feedbacks"],
+    tags=["reviews"],
     summary="Получить отзывы по значению",
     description="Админский эндпоинт. Возвращает список отзывов по полям barcode|vendor_code",
-    response_model=FeedbackByValueResponse
+    response_model=ReviewByValueResponse
 )
 @inject
-async def get_feedbacks_by_value(
-        request: FeedbackByValueRequest,
+async def get_reviews_by_value(
+        request: ReviewByValueRequest,
         token: str = Depends(get_wb_admin_token),
-        feedback_service: FeedbackService = Depends(Provide[Container.feedback_service])
+        review_service: ReviewService = Depends(Provide[Container.review_service])
 ):
     try:
-        return await feedback_service.get_feedbacks_by_value(
+        return await review_service.get_reviews_by_value(
             token=token,
             vendor_code=request.vendor_code,
             barcode=request.barcode

@@ -64,9 +64,9 @@ class Settings(BaseSettings):
     TELEGRAM_NOTIFICATIONS_QUEUE: str = "wb_manager_notifications"
 
     # Настройки для работы с отзывами
-    FEEDBACKS_WB_TOKEN: str = ""
-    FEEDBACKS_BASE_URL: str = "https://feedbacks-api.wildberries.ru"
-    FEEDBACKS_ENDPOINT: str = "/api/v1/feedbacks"
+    REVIEWS_WB_TOKEN: str = ""
+    REVIEWS_BASE_URL: str = "https://feedbacks-api.wildberries.ru"
+    REVIEWS_ENDPOINT: str = "/api/v1/feedbacks"
 
     class Config:
         env_file = f"{project_root}/.env"

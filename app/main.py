@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import router, wildberries, categories, feedbacks
+from app.api import router, wildberries, categories, reviews
 from app.containers import Container
 from app.utils.logging import get_logger, setup_logging
 from config import settings
@@ -25,7 +25,7 @@ def init_dependency_injector() -> Container:
     container.config.from_pydantic(settings=settings, required=True)
 
     container.wire(
-        modules=[wildberries, categories, feedbacks]
+        modules=[wildberries, categories, reviews]
     )
 
     return container
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
         yield
 
         await container.wildberries_api().close()
-        await container.feedback_api().close()
+        await container.review_api().close()
         await container.shutdown_resources()
 
     except Exception as e:

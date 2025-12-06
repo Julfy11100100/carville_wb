@@ -1,7 +1,7 @@
 from dependency_injector import containers, providers
 
 from app.services.elasticsearch_service import ElasticsearchService
-from app.services.feedback_service import FeedbackService
+from app.services.review_service import ReviewService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoRepository
 from app.services.product_match_service import ProductMatchService
 from app.services.sql_category_service import SqlCategoryService
@@ -74,16 +74,16 @@ class Container(containers.DeclarativeContainer):
         sql_category_service=sql_category_service
     )
 
-    feedback_api = providers.Singleton(
+    review_api = providers.Singleton(
         WildberriesAPI,
-        base_url=config.FEEDBACKS_BASE_URL,
+        base_url=config.REVIEWS_BASE_URL,
         max_retries=config.MAX_RETRIES,
         timeout=config.REQUEST_TIMEOUT
 
     )
 
-    feedback_service = providers.Factory(
-        FeedbackService,
-        api_client=feedback_api,
+    review_service = providers.Factory(
+        ReviewService,
+        api_client=review_api,
         elasticsearch_service=elasticsearch_service
     )

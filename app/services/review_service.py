@@ -15,14 +15,14 @@ from config import settings
 logger = get_logger()
 
 
-class FeedbackService:
+class ReviewService:
     """
     Сервис для работы с отзывами Wildberries.
     Занимается загрузкой с WB API и трансформацией данных c последующей индексацией через ElasticsearchService.
     """
 
     # Константы
-    FEEDBACKS_ENDPOINT = settings.FEEDBACKS_ENDPOINT
+    REVIEW_ENDPOINT = settings.REVIEWS_ENDPOINT
     DEFAULT_PAGE_SIZE = 5000
 
     def __init__(
@@ -39,47 +39,47 @@ class FeedbackService:
         self.es = elasticsearch_service
 
     @staticmethod
-    def _transform_feedback_to_doc(feedback: Dict[str, Any]) -> Dict[str, Any]:
+    def _transform_review_to_doc(review: Dict[str, Any]) -> Dict[str, Any]:
         """
         Преобразовать отзыв WB в документ для индексации.
 
         Args:
-            feedback: Отзыв с WB API
+            review: Отзыв с WB API
 
         Returns:
             Документ для ES
         """
-        product_details = feedback.get("productDetails", {}) or {}
+        product_details = review.get("productDetails", {}) or {}
 
         return {
-            "id": feedback.get("id"),
-            "text": feedback.get("text"),
-            "pros": feedback.get("pros"),
-            "cons": feedback.get("cons"),
-            "product_valuation": feedback.get("productValuation"),
-            "created_date": feedback.get("createdDate"),
+            "id": review.get("id"),
+            "text": review.get("text"),
+            "pros": review.get("pros"),
+            "cons": review.get("cons"),
+            "product_valuation": review.get("productValuation"),
+            "created_date": review.get("createdDate"),
             "product_name": product_details.get("productName"),
             "vendor_code": product_details.get("supplierArticle"),
             "brand_name": product_details.get("brandName"),
-            "subject_id": feedback.get("subjectId"),
-            "barcode": feedback.get("lastOrderShkId"),
-            "photos_amount": len(feedback.get("photoLinks") or []),
+            "subject_id": review.get("subjectId"),
+            "barcode": review.get("lastOrderShkId"),
+            "photos_amount": len(review.get("photoLinks") or []),
             "videos_amount": 1,
-            "status": feedback.get("state"),
+            "status": review.get("state"),
         }
 
-    async def create_feedback_index(self, token: str) -> Dict[str, Any]:
+    async def create_review_index(self, token: str) -> Dict[str, Any]:
         """Создать индекс для отзывов"""
         hashed_token = hash_token(token)
-        return await self.es.create_feedback_index(hashed_token)
+        return await self.es.create_review_index(hashed_token)
 
-    async def get_last_indexed_feedback_date(self, token: str) -> Optional[int]:
+    async def get_last_indexed_review_date(self, token: str) -> Optional[int]:
         """
         Получить Unix timestamp последнего индексированного отзыва.
         Возвращает None если индекс пуст или не существует.
         """
         hashed_token = hash_token(token)
-        date_str = await self.es.get_last_indexed_feedback_date(hashed_token)
+        date_str = await self.es.get_last_indexed_review_date(hashed_token)
 
         if not date_str:
             return None
@@ -91,7 +91,7 @@ class FeedbackService:
             logger.warning(f"Не удалось парсить дату: {date_str}, ошибка: {str(e)}")
             return None
 
-    async def fetch_and_index_all_feedbacks(
+    async def fetch_and_index_all_reviews(
             self,
             token: str,
             resume_from_date: Optional[int] = None,
@@ -114,7 +114,7 @@ class FeedbackService:
         hashed_token = hash_token(token)
 
         # Если не указана дата, пытаемся получить последнюю сохранённую
-        start_timestamp = await self.get_last_indexed_feedback_date(token) if not resume_from_date else resume_from_date
+        start_timestamp = await self.get_last_indexed_review_date(token) if not resume_from_date else resume_from_date
 
         skip = 0
         total_fetched = 0
@@ -132,7 +132,7 @@ class FeedbackService:
 
         try:
             # Создаём индекс перед загрузкой
-            result = await self.create_feedback_index(token)
+            result = await self.create_review_index(token)
             if result.get("status") == "error":
                 logger.warning(f"Ошибка при создании индекса: {result.get('error')}")
 
@@ -158,40 +158,40 @@ class FeedbackService:
 
                     response = await self.api_client.make_request(
                         "GET",
-                        self.FEEDBACKS_ENDPOINT,
+                        self.REVIEW_ENDPOINT,
                         token,
                         params=params
                     )
 
-                    feedbacks = response.get("data", {}).get("feedbacks", [])
+                    reviews = response.get("data", {}).get("feedbacks", [])
 
-                    if not feedbacks:
+                    if not reviews:
                         logger.info(
                             f"Нет больше отзывов (skip={skip}). Загрузка завершена"
                         )
                         break
 
                     # Трансформируем и индексируем батч
-                    docs = [self._transform_feedback_to_doc(fb) for fb in feedbacks]
-                    indexed = await self.es.index_feedbacks(hashed_token, docs)
+                    docs = [self._transform_review_to_doc(fb) for fb in reviews]
+                    indexed = await self.es.index_reviews(hashed_token, docs)
 
                     if indexed:
-                        total_indexed += len(feedbacks)
+                        total_indexed += len(reviews)
                     else:
                         failed_batches += 1
 
-                    total_fetched += len(feedbacks)
+                    total_fetched += len(reviews)
                     batch_count += 1
 
                     logger.info(
-                        f"Батч {batch_count}: получено {len(feedbacks)}, "
+                        f"Батч {batch_count}: получено {len(reviews)}, "
                         f"всего: {total_fetched}, skip={skip}"
                     )
 
                     # Если получилось меньше, чем запросили, это последняя страница
-                    if len(feedbacks) < take:
+                    if len(reviews) < take:
                         logger.info(
-                            f"Получено меньше отзывов ({len(feedbacks)} < {take}), "
+                            f"Получено меньше отзывов ({len(reviews)} < {take}), "
                             f"это последняя страница"
                         )
                         break
@@ -205,8 +205,8 @@ class FeedbackService:
                         skip = 0
                         total_fetched -= 1
                         total_indexed -= 1
-                        last_feedback = docs[-1]
-                        dt = date_parser.isoparse(last_feedback.get("created_date"))
+                        last_review = docs[-1]
+                        dt = date_parser.isoparse(last_review.get("created_date"))
                         start_timestamp = int(dt.timestamp())
                         logger.info(
                             f"Превысили лимит по skip в 195к,"
@@ -242,7 +242,7 @@ class FeedbackService:
                        f"успешно индексировано {total_indexed}"
         }
 
-    async def get_feedbacks_by_value(
+    async def get_reviews_by_value(
             self,
             token: str,
             vendor_code: Optional[str] = None,
@@ -250,14 +250,14 @@ class FeedbackService:
             size: int = 10000
     ) -> Dict[str, Any]:
         """Получить отзывы по vendor_code или bar_code"""
-        return await self.es.search_feedbacks_by_value(
+        return await self.es.search_reviews_by_value(
             token=hash_token(token),
             vendor_code=vendor_code,
             barcode=barcode,
             size=size
         )
 
-    async def get_feedbacks_by_period(
+    async def get_reviews_by_period(
             self,
             token: str,
             period: Optional[str] = None,
@@ -302,7 +302,7 @@ class FeedbackService:
                     "error": f"Неверный формат курсора: {str(e)}"
                 }
 
-        return await self.es.search_feedbacks_by_period(
+        return await self.es.search_reviews_by_period(
             token=hash_token(token),
             date_from=date_from,
             date_to=date_to,

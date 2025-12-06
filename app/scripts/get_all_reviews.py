@@ -4,23 +4,24 @@ from datetime import datetime
 
 from app.schemas.tg import EntityType, ActionType, NotificationStatus
 from app.services.elasticsearch_service import ElasticsearchService
-from app.services.feedback_service import FeedbackService
+from app.services.review_service import ReviewService
 from app.services.rabbitmq import RabbitMQService
 from app.services.wb_api import WildberriesAPI
-from app.utils.logging import get_logger
+from app.utils.logging import get_logger, setup_logging
 from config import settings
 
+setup_logging()
 logger = get_logger()
 
 
-async def get_all_feedbacks():
+async def get_all_reviews():
     # Создаем экземпляры сервисов
     rabbitmq_service = RabbitMQService()
     wb_api = WildberriesAPI(
-        base_url=settings.FEEDBACKS_BASE_URL
+        base_url=settings.REVIEWS_BASE_URL
     )
     elasticsearch_service = ElasticsearchService()
-    feedback_service = FeedbackService(
+    review_service = ReviewService(
         api_client=wb_api,
         elasticsearch_service=elasticsearch_service
     )
@@ -39,11 +40,11 @@ async def get_all_feedbacks():
             }
         )
 
-        feedback_result = await feedback_service.fetch_and_index_all_feedbacks(
-            token=settings.FEEDBACKS_WB_TOKEN
+        review_result = await review_service.fetch_and_index_all_reviews(
+            token=settings.REVIEWS_WB_TOKEN
         )
 
-        logger.info(f"Результат подгрузки отзывов: {feedback_result}")
+        logger.info(f"Результат подгрузки отзывов: {review_result}")
 
         await rabbitmq_service.send_notification(
             entity=EntityType.REVIEWS,
@@ -51,7 +52,7 @@ async def get_all_feedbacks():
             status=NotificationStatus.SUCCESS,
             message=(
                 f"✅ Ежедневная подгрузка отзывов завершена\n"
-                f"{feedback_result.get('message')}"
+                f"{review_result.get('message')}"
             ),
             details={
                 "started_at": started_dt.isoformat(),
@@ -84,4 +85,4 @@ async def get_all_feedbacks():
 
 
 if __name__ == '__main__':
-    asyncio.run(get_all_feedbacks())
+    asyncio.run(get_all_reviews())

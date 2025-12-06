@@ -3,7 +3,7 @@ from typing import List, Optional
 from pydantic import Field, model_validator, BaseModel
 
 
-class FeedbackDoc(BaseModel):
+class ReviewDoc(BaseModel):
     id: str
     text: Optional[str] = None
     pros: Optional[str] = None
@@ -20,7 +20,7 @@ class FeedbackDoc(BaseModel):
     status: Optional[str] = None
 
 
-class FeedbackListRequest(BaseModel):
+class ReviewListRequest(BaseModel):
     # Режим 1: относительный период (например 15h, 2d, 3w)
     period: str | None = Field(None, description="Период, например 15h, 2d, 3w")
     # Режим 2: абсолютный интервал дат/времени (UTC). Даты без времени трактуются как начало/конец дня
@@ -32,7 +32,7 @@ class FeedbackListRequest(BaseModel):
     cursor: str | None = Field(None, description="Курсор для продолжения постраничного получения (base64 от JSON)")
 
 
-class FeedbackByValueRequest(BaseModel):
+class ReviewByValueRequest(BaseModel):
     vendor_code: Optional[str] = Field(None, description="vendor_code товара")
     barcode: Optional[int] = Field(None, description="Штрихкод товара")
 
@@ -51,16 +51,16 @@ class FeedbackByValueRequest(BaseModel):
         return self
 
 
-class FeedbackListResponse(BaseModel):
-    feedbacks: List[FeedbackDoc] = Field(..., description="Список отзывов за период (по 1000 на страницу)")
+class ReviewListResponse(BaseModel):
+    reviews: List[ReviewDoc] = Field(..., description="Список отзывов за период (по 1000 на страницу)")
     total: int = Field(..., description="Общее количество найденных отзывов (приблизительное)")
     has_next: bool = Field(..., description="Есть ли следующая страница данных в указанном интервале")
     next_cursor: Optional[str] = Field(None,
                                        description="Курсор для следующей страницы или null, если данных больше нет")
 
 
-class FeedbackByValueResponse(BaseModel):
-    feedbacks: List[FeedbackDoc] = Field(..., description="Список отзывов по значению (макс. 10000)")
+class ReviewByValueResponse(BaseModel):
+    reviews: List[ReviewDoc] = Field(..., description="Список отзывов по значению (макс. 10000)")
     total: int = Field(..., description="Общее количество найденных отзывов")
     avg_rating: Optional[float] = Field(None, description="Средний рейтинг по отзывам или null, если нет рейтингов")
     ratings: dict = Field(default_factory=dict, description="Распределение рейтингов по количеству (ключи 1..5)")
