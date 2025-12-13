@@ -19,6 +19,10 @@ class ElasticsearchService(ReconnectableService):
         self._hosts = [settings.ELASTICSEARCH_HOST]
         self._timeout = 120
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._basic_auth = (
+            settings.ELASTICSEARCH_USERNAME,
+            settings.ELASTICSEARCH_PASSWORD,
+        )
 
     async def _connect(self):
         """Подключение к Elasticsearch"""
@@ -29,7 +33,8 @@ class ElasticsearchService(ReconnectableService):
             hosts=self._hosts,
             timeout=self._timeout,
             max_retries=2,
-            retry_on_timeout=True
+            retry_on_timeout=True,
+            basic_auth=self._basic_auth,
         )
         # Запоминаем event loop, в котором создан клиент
         self._client_loop = asyncio.get_event_loop()
