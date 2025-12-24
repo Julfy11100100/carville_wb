@@ -632,40 +632,22 @@ class ElasticsearchService(ReconnectableService):
                             "refresh_interval": "60s"
                         }
                     },
+
                     "mappings": {
                         "dynamic": False,
                         "properties": {
-                            # ID отзыва
-                            "id": {"type": "keyword"},
-
-                            # Текст отзыва
+                            "id_review": {"type": "keyword"},
+                            "sku": {"type": "integer"},
                             "text": {"type": "text", "analyzer": "standard"},
-                            "pros": {"type": "text", "analyzer": "standard"},
-                            "cons": {"type": "text", "analyzer": "standard"},
-
-                            # Оценка
-                            "product_valuation": {"type": "byte"},
-
-                            # Дата создания (для сортировки и фильтрации)
-                            "created_date": {"type": "date"},
-
-                            # Информация о товаре
-                            "product_name": {"type": "text", "analyzer": "standard"},
-                            "vendor_code": {"type": "keyword"},  # supplierArticle
-                            "brand_name": {"type": "keyword"},
-
-                            # Категория
-                            "subject_id": {"type": "long"},
-
-                            # Баркод (lastOrderShkId)
-                            "barcode": {"type": "keyword"},
-
-                            # кол-во фоток\видео
+                            "published_at": {"type": "date"},
+                            "rating": {"type": "byte"},
+                            "comments_amount": {"type": "byte"},
                             "photos_amount": {"type": "integer"},
                             "videos_amount": {"type": "integer"},
-
-                            "status": {"type": "keyword"},
-
+                            "is_rating_participant": {"type": "byte"},
+                            "offer_id": {"type": "keyword"},  # supplierArticle он же vendor_code
+                            "product_name": {"type": "text", "analyzer": "standard"},
+                            "barcodes": {"type": "keyword"},
                         }
                     }
                 }
@@ -767,13 +749,13 @@ class ElasticsearchService(ReconnectableService):
                 body={
                     "query": {"match_all": {}},
                     "size": 1,
-                    "sort": [{"created_date": {"order": "desc"}}]
+                    "sort": [{"published_at": {"order": "desc"}}]
                 }
             )
 
             hits = response.get("hits", {}).get("hits", [])
             if hits:
-                last_date = hits[0]["_source"].get("created_date")
+                last_date = hits[0]["_source"].get("published_at")
                 logger.debug(f"Последняя дата отзыва для {token}: {last_date}")
                 return last_date
 
@@ -862,7 +844,7 @@ class ElasticsearchService(ReconnectableService):
             barcode: Optional[int] = None,
             size: int = 10000
     ) -> Dict[str, Any]:
-        """Получить отзывы по vendor_code или barcode"""
+        """Получить отзывы по vendor_code (offer_id) или barcode (barcodes)"""
 
         try:
             await self._ensure_valid_client()
@@ -892,9 +874,9 @@ class ElasticsearchService(ReconnectableService):
             # Строим query
             must_clauses = []
             if vendor_code:
-                must_clauses.append({"term": {"vendor_code": vendor_code}})
+                must_clauses.append({"term": {"offer_id": vendor_code}})
             if barcode:
-                must_clauses.append({"term": {"barcode": barcode}})
+                must_clauses.append({"term": {"barcodes": barcode}})
 
             query = {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
 
@@ -903,7 +885,7 @@ class ElasticsearchService(ReconnectableService):
                 body={
                     "query": query,
                     "size": min(size, 10000),
-                    "sort": [{"created_date": {"order": "desc"}}]
+                    "sort": [{"published_at": {"order": "desc"}}]
                 }
             )
 
@@ -967,13 +949,13 @@ class ElasticsearchService(ReconnectableService):
                     range_filter["gte"] = date_from
                 if date_to:
                     range_filter["lte"] = date_to
-                must_clauses.append({"range": {"created_date": range_filter}})
+                must_clauses.append({"range": {"published_at": range_filter}})
 
             query = {"bool": {"must": must_clauses}} if must_clauses else {"match_all": {}}
 
             # Сортировка для search_after пагинации
             sort = [
-                {"created_date": {"order": "desc"}},
+                {"published_at": {"order": "desc"}},
                 {"id": {"order": "desc"}}
             ]
 

@@ -4,32 +4,18 @@ from pydantic import Field, model_validator, BaseModel
 
 
 class ReviewDoc(BaseModel):
-    id: str
+    id_review: str
+    sku: Optional[int] = None
     text: Optional[str] = None
-    pros: Optional[str] = None
-    cons: Optional[str] = None
-    product_valuation: Optional[int] = None
-    created_date: Optional[str] = None
-    product_name: Optional[str] = None
-    vendor_code: Optional[str] = None
-    brand_name: Optional[str] = None
-    subject_id: Optional[int] = None
-    bar_code: Optional[int] = None
+    published_at: Optional[str] = None
+    rating: Optional[int] = None
+    comments_amount: Optional[int] = None
     photos_amount: Optional[int] = None
     videos_amount: Optional[int] = None
-    status: Optional[str] = None
-
-
-class ReviewListRequest(BaseModel):
-    # Режим 1: относительный период (например 15h, 2d, 3w)
-    period: str | None = Field(None, description="Период, например 15h, 2d, 3w")
-    # Режим 2: абсолютный интервал дат/времени (UTC). Даты без времени трактуются как начало/конец дня
-    date_from: str | None = Field(None,
-                                  description="Начало интервала, ISO 8601 UTC, например 2025-11-01 или 2025-11-01T00:00:00Z")
-    date_to: str | None = Field(None,
-                                description="Конец интервала, ISO 8601 UTC, например 2025-11-30 или 2025-11-30T23:59:59Z")
-    # Курсор для постраничной навигации (base64(JSON) со значениями search_after)
-    cursor: str | None = Field(None, description="Курсор для продолжения постраничного получения (base64 от JSON)")
+    is_rating_participant: Optional[int] = None
+    vendor_code: Optional[str] = Field(None, alias="offer_id", serialization_alias="vendor_code")  # в эластике хранится как offer_id
+    product_name: Optional[str] = None
+    barcodes: Optional[int] = None
 
 
 class ReviewByValueRequest(BaseModel):
@@ -49,14 +35,6 @@ class ReviewByValueRequest(BaseModel):
             raise ValueError("Необходимо передать либо vendor_code, либо barcode.")
 
         return self
-
-
-class ReviewListResponse(BaseModel):
-    reviews: List[ReviewDoc] = Field(..., description="Список отзывов за период (по 1000 на страницу)")
-    total: int = Field(..., description="Общее количество найденных отзывов (приблизительное)")
-    has_next: bool = Field(..., description="Есть ли следующая страница данных в указанном интервале")
-    next_cursor: Optional[str] = Field(None,
-                                       description="Курсор для следующей страницы или null, если данных больше нет")
 
 
 class ReviewByValueResponse(BaseModel):

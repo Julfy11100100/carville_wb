@@ -1,12 +1,11 @@
 import asyncio
-import base64
-import json
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 
 from dateutil import parser as date_parser
 
 from app.services.elasticsearch_service import ElasticsearchService
+from app.services.sql_review_service import SqlReviewService
 from app.services.wb_api import WildberriesAPI
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
@@ -29,43 +28,61 @@ class ReviewService:
             self,
             api_client: WildberriesAPI,
             elasticsearch_service: ElasticsearchService,
+            sql_service: Optional[SqlReviewService] = None
     ):
         """
         Args:
             api_client: WildberriesAPI клиент
             elasticsearch_service: ElasticsearchService для работы с ES
+            sql_service: Сервис по записи в MSSQL
         """
         self.api_client = api_client
         self.es = elasticsearch_service
+        self.sql_service = sql_service if sql_service else SqlReviewService()
 
     @staticmethod
-    def _transform_review_to_doc(review: Dict[str, Any]) -> Dict[str, Any]:
+    def _transform_vendor_code(vendor_code: str) -> str:
+        """Преобразуем vendor_code: убираем всё после "/", пробелы и "-" """
+        if not vendor_code:
+            return ""
+
+        # Убираем всё после "/"
+        vendor_code = vendor_code.split("/")[0]
+
+        # Убираем пробелы и "-"
+        vendor_code = vendor_code.replace(" ", "").replace("-", "")
+
+        return vendor_code.strip()
+
+    def _transform_review_to_doc(self, review: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Преобразовать отзыв WB в документ для индексации.
+        Преобразовать отзыв WB в документ для индексации и записи в бд.
 
         Args:
             review: Отзыв с WB API
 
         Returns:
-            Документ для ES
+            Документ для ES и Бд
         """
         product_details = review.get("productDetails", {}) or {}
+        text_value = review.get("text") or None
+        if isinstance(text_value, str) and len(text_value) > 3000:
+            text_value = text_value[:3000]
+        published_at = self._parse_datetime(review.get("createdDate"))
 
         return {
-            "id": review.get("id"),
-            "text": review.get("text"),
-            "pros": review.get("pros"),
-            "cons": review.get("cons"),
-            "product_valuation": review.get("productValuation"),
-            "created_date": review.get("createdDate"),
-            "product_name": product_details.get("productName"),
-            "vendor_code": product_details.get("supplierArticle"),
-            "brand_name": product_details.get("brandName"),
-            "subject_id": review.get("subjectId"),
-            "barcode": review.get("lastOrderShkId"),
+            "id_review": review.get("id"),
+            "sku": self._safe_int(product_details.get("nmId")),
+            "text": text_value,
+            "published_at": self._format_datetime(published_at),
+            "rating": self._safe_int(review.get("productValuation")),
+            "comments_amount": 1,
             "photos_amount": len(review.get("photoLinks") or []),
-            "videos_amount": 1,
-            "status": review.get("state"),
+            "videos_amount": 1 if review.get("video", None) else 0,
+            "is_rating_participant": 1,
+            "offer_id": self._transform_vendor_code(product_details.get("supplierArticle")),
+            "product_name": product_details.get("productName"),
+            "barcodes": review.get("lastOrderShkId")
         }
 
     async def create_review_index(self, token: str) -> Dict[str, Any]:
@@ -73,22 +90,18 @@ class ReviewService:
         hashed_token = hash_token(token)
         return await self.es.create_review_index(hashed_token)
 
-    async def get_last_indexed_review_date(self, token: str) -> Optional[int]:
+    async def get_last_review_date_from_db(self) -> Optional[int]:
         """
-        Получить Unix timestamp последнего индексированного отзыва.
-        Возвращает None если индекс пуст или не существует.
+        Получить Unix timestamp последнего отзыва из бд.
+        Возвращает None если дата пустая.
         """
-        hashed_token = hash_token(token)
-        date_str = await self.es.get_last_indexed_review_date(hashed_token)
-
-        if not date_str:
-            return None
-
         try:
-            dt = date_parser.isoparse(date_str)
+            dt = await self.sql_service.get_last_date()
+            if not dt:
+                return None
             return int(dt.timestamp())
         except Exception as e:
-            logger.warning(f"Не удалось парсить дату: {date_str}, ошибка: {str(e)}")
+            logger.warning(f"Не удалось получить дату, ошибка: {str(e)}")
             return None
 
     async def fetch_and_index_all_reviews(
@@ -114,11 +127,12 @@ class ReviewService:
         hashed_token = hash_token(token)
 
         # Если не указана дата, пытаемся получить последнюю сохранённую
-        start_timestamp = await self.get_last_indexed_review_date(token) if not resume_from_date else resume_from_date
+        start_timestamp = await self.get_last_review_date_from_db() if not resume_from_date else resume_from_date
 
         skip = 0
         total_fetched = 0
         total_indexed = 0
+        total_inserted = 0
         failed_batches = 0
         last_error = None
         batch_count = 0
@@ -148,7 +162,7 @@ class ReviewService:
                     if start_timestamp:
                         params["dateFrom"] = start_timestamp
 
-                    # Сортировка по дате (от новых к старым для логичного порядка)
+                    # Сортировка по дате (от старых к новым для логичного порядка)
                     params["order"] = "dateAsc"
 
                     logger.debug(
@@ -173,12 +187,20 @@ class ReviewService:
 
                     # Трансформируем и индексируем батч
                     docs = [self._transform_review_to_doc(fb) for fb in reviews]
+
+                    # Индексируем
                     indexed = await self.es.index_reviews(hashed_token, docs)
+
+                    # Сохраняем в бд
+                    saved = await self.sql_service.bulk_insert_product_wb_reviews(docs)
 
                     if indexed:
                         total_indexed += len(reviews)
                     else:
                         failed_batches += 1
+
+                    if saved:
+                        total_inserted += saved
 
                     total_fetched += len(reviews)
                     batch_count += 1
@@ -206,15 +228,14 @@ class ReviewService:
                         total_fetched -= 1
                         total_indexed -= 1
                         last_review = docs[-1]
-                        dt = date_parser.isoparse(last_review.get("created_date"))
+                        dt = date_parser.isoparse(last_review.get("published_at"))
                         start_timestamp = int(dt.timestamp())
                         logger.info(
                             f"Превысили лимит по skip в 195к,"
                             f"обнуляем и выставляем новый start_timestamp = {start_timestamp}")
 
-
                 except Exception as e:
-                    logger.error(f"Ошибка при загрузке батча (skip={skip}): {str(e)}")
+                    logger.exception(f"Ошибка при загрузке батча (skip={skip})")
                     last_error = str(e)
                     failed_batches += 1
 
@@ -226,20 +247,33 @@ class ReviewService:
                         skip += take
                         await asyncio.sleep(2)
 
+            # Производим оставшиеся действия с бд
+            # удаляем дубли
+            await self.sql_service.delete_duplicates()
+            # первое обогащение id_product
+            await self.sql_service.update_product_ids_after_reviews_migration()
+            # второе обогащение id_product
+            await self.sql_service.update_product_ids_from_additional_names()
+
         except Exception as e:
             logger.error(f"Критическая ошибка при загрузке для {hashed_token}: {str(e)}")
             last_error = str(e)
+
+        finally:
+            await self.sql_service.close_pool()
 
         return {
             "status": "completed" if failed_batches == 0 else "partially_completed",
             "total_fetched": total_fetched,
             "total_indexed": total_indexed,
+            "total_inserted": total_inserted,
             "failed_batches": failed_batches,
             "batches_processed": batch_count,
             "last_skip": skip,
             "last_error": last_error,
             "message": f"Загружено {total_fetched} отзывов, "
-                       f"успешно индексировано {total_indexed}"
+                       f"успешно индексировано {total_indexed}, "
+                       f"успешно сохранено в бд {total_inserted}"
         }
 
     async def get_reviews_by_value(
@@ -257,84 +291,33 @@ class ReviewService:
             size=size
         )
 
-    async def get_reviews_by_period(
-            self,
-            token: str,
-            period: Optional[str] = None,
-            date_from: Optional[str] = None,
-            date_to: Optional[str] = None,
-            cursor: Optional[str] = None,
-            size: int = 1000
-    ) -> Dict[str, Any]:
-        """Получить отзывы за период с постраничной навигацией"""
-        # Преобразуем период в даты если нужно
-        if period:
-            date_from, date_to = self._parse_relative_period(period)
-
-        elif date_from or date_to:
-            # Парсим абсолютные даты
-            if date_from:
-                dt = self._parse_date_string(date_from)
-                if "T" not in date_from:
-                    dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                date_from = dt.isoformat() + "Z"
-
-            if date_to:
-                dt = self._parse_date_string(date_to)
-                if "T" not in date_to:
-                    dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                date_to = dt.isoformat() + "Z"
-
-        # Обработка курсора
-        if cursor:
-            try:
-                search_after = json.loads(base64.b64decode(cursor))
-                # Добавляем search_after в поиск ES
-                # Это требует модификации метода в ElasticsearchService
-                # Для простоты, пока просто передаём даты
-            except Exception as e:
-                logger.warning(f"Ошибка парсинга курсора: {str(e)}")
-                return {
-                    "reviews": [],
-                    "total": 0,
-                    "has_next": False,
-                    "next_cursor": None,
-                    "error": f"Неверный формат курсора: {str(e)}"
-                }
-
-        return await self.es.search_reviews_by_period(
-            token=hash_token(token),
-            date_from=date_from,
-            date_to=date_to,
-            size=size
-        )
-
     @staticmethod
-    def _parse_relative_period(period: str) -> Tuple[str, str]:
-        """Парсить относительный период (15h, 2d, 3w) в абсолютные даты"""
-        now = datetime.utcnow()
-
-        if period.endswith("h"):
-            delta = timedelta(hours=int(period[:-1]))
-        elif period.endswith("d"):
-            delta = timedelta(days=int(period[:-1]))
-        elif period.endswith("w"):
-            delta = timedelta(weeks=int(period[:-1]))
-        else:
-            raise ValueError(f"Неизвестный формат периода: {period}")
-
-        date_from = (now - delta).replace(microsecond=0)
-        date_to = now.replace(microsecond=0)
-
-        return (
-            date_from.isoformat() + "Z",
-            date_to.isoformat() + "Z"
-        )
-
-    @staticmethod
-    def _parse_date_string(date_str: str) -> datetime:
-        """Парсить дату в разных форматах"""
+    def _safe_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
         try:
-            return date_parser.isoparse(date_str)
-        except Exception:
-            raise ValueError(f"Не удалось парсить дату: {date_str}")
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            # приводим к UTC без tzinfo для MSSQL
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                dt = dt.astimezone(timezone.utc)
+                return dt.replace(tzinfo=None)
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _format_datetime(value: Optional[datetime]) -> Optional[str]:
+        if not value:
+            return None
+        return value.strftime("%Y-%m-%dT%H:%M:%S")

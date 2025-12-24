@@ -1,11 +1,12 @@
 from dependency_injector import containers, providers
 
 from app.services.elasticsearch_service import ElasticsearchService
-from app.services.review_service import ReviewService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoRepository
 from app.services.product_match_service import ProductMatchService
+from app.services.review_service import ReviewService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.sql_repository import SQLDatabaseRepository
+from app.services.sql_review_service import SqlReviewService
 from app.services.task_manager import TaskManager
 from app.services.wb_api import WildberriesAPI
 from app.services.wb_client import WildberriesClient
@@ -82,8 +83,14 @@ class Container(containers.DeclarativeContainer):
 
     )
 
+    sql_review_service = providers.Singleton(
+        SqlReviewService,
+        sql_repository=sql_database_repository
+    )
+
     review_service = providers.Factory(
         ReviewService,
         api_client=review_api,
-        elasticsearch_service=elasticsearch_service
+        elasticsearch_service=elasticsearch_service,
+        sql_service=sql_review_service
     )
