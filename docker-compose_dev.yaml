@@ -5,8 +5,12 @@ services:
     restart: unless-stopped
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
+      - xpack.security.enabled=true
       - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - ELASTIC_USERNAME=${ELASTICSEARCH_USERNAME}
+      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD}
+    env_file:
+      - .env_develop
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     ports:
@@ -18,7 +22,7 @@ services:
         max-size: "10m"
         max-file: "1"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f -u ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD} http://localhost:9200/_cluster/health || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 5
