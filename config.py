@@ -43,6 +43,8 @@ class Settings(BaseSettings):
 
     # Elasticsearch настройки
     ELASTICSEARCH_HOST: str = "http://localhost:9200"
+    ELASTICSEARCH_USERNAME: str = "elastic"
+    ELASTICSEARCH_PASSWORD: str = ""
 
     # WB API настройки
     # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
