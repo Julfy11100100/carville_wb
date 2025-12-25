@@ -227,6 +227,7 @@ class ReviewService:
                         skip = 0
                         total_fetched -= 1
                         total_indexed -= 1
+                        total_inserted -= 1
                         last_review = docs[-1]
                         dt = date_parser.isoparse(last_review.get("published_at"))
                         start_timestamp = int(dt.timestamp())
