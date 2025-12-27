@@ -410,3 +410,4 @@ async def match_products(
             status_code=500,
             detail="Внутренняя ошибка сервера"
         )
+
