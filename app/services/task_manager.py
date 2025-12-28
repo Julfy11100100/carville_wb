@@ -6,9 +6,9 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import PyMongoError, DuplicateKeyError
 
-from app.services.mongo_repository import MongoRepository
 from app.exceptions.task import TaskDatabaseError, TaskAlreadyExistsError
 from app.schemas.task import TaskInfo, TaskStatus, TaskType, TaskStatusRequest
+from app.services.mongo_repository import MongoRepository
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
 
@@ -496,3 +496,21 @@ class TaskManager:
                 "Ошибка при получении статистики задач",
                 details={"original_error": str(e)}
             )
+
+    async def is_client_indexing(self, wb_token: str) -> bool:
+        """Проверить, идет ли индексация для клиента
+
+        Args:
+            wb_token: token клиента
+
+        Returns:
+            True если индексация идет (таска в статусе PENDING или RUNNING), False иначе
+        """
+        # Проверяем есть ли активная таска для клиента
+        hash_wb_token = hash_token(wb_token)
+        active_task = await self.get_active_task_by_token(wb_token, TaskType.PRODUCTS_INFO)
+        if active_task:
+            logger.debug(
+                f"У клиента {hash_wb_token} активна задача индексирования {active_task.task_id} со статусом {active_task.status}.")
+            return True
+        return False

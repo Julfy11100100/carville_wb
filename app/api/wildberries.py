@@ -2,17 +2,20 @@ from typing import List
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
+from watchfiles import awatch
 
 from app.containers import Container
 from app.exceptions.task import TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
+from app.schemas.product_analyze import ProductAnalyzeResponse, ProductAnalyzeRequest
 from app.schemas.product_match import ProductMatchRequest, ProductListMatchResponse, ProductMatchResponse
 from app.schemas.product_update import ProductUpdateRequest
 from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse, TaskInfoResponse
+from app.services.product_analyze_service import ProductAnalyzeService
 from app.services.product_match_service import ProductMatchService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
-from app.services.wb_client import WildberriesClient
+from app.services.wb_client_service import WildberriesClient
 from app.utils.jwt import is_valid_token
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
@@ -411,3 +414,52 @@ async def match_products(
             detail="Внутренняя ошибка сервера"
         )
 
+
+@router.post(
+    "/analyze",
+    response_model=ProductAnalyzeResponse,
+    summary="Анализ данных товаров",
+    description="Анализ данных товаров по указанному бренду",
+)
+@inject
+async def analyze_products(
+        request: ProductAnalyzeRequest,
+        token: str = Depends(get_wb_token),
+        task_manager: TaskManager = Depends(Provide[Container.task_manager]),
+        product_analyze_service: ProductAnalyzeService = Depends(Provide[Container.product_analyze_service])
+):
+    try:
+        hash_wb_token = hash_token(token)
+        # Проверяем, не идет ли индексация
+        if await task_manager.is_client_indexing(token):
+            logger.warning(f"Идет индексирование для клиента {hash_wb_token} или администратора")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Идет индексация",
+                    "details": "В данный момент происходит индексация товаров. Пожалуйста, подождите немного и попробуйте снова."
+                }
+            )
+
+        logger.info(f"Начало анализа продуктов для: {hash_wb_token}, бренд: {request.brand}")
+
+        # Вызываем метод сервиса для подготовки данных
+        products = await product_analyze_service.prepare_data(
+            request.brand, token, request.carville_match_field, request.client_match_field
+        )
+
+        logger.info(f"Анализ продукта успешно завершен для {hash_wb_token}")
+
+        return ProductAnalyzeResponse(
+            products=products["products"],
+            category_ids=None,
+            total_products=products["total_products"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при анализе продуктов: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка сервера"
+        )

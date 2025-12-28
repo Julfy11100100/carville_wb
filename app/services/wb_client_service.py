@@ -8,7 +8,7 @@ from app.schemas.task import TaskStatus, TaskInfo
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
-from app.services.wb_api import WildberriesAPI
+from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
 

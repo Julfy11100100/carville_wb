@@ -6,7 +6,7 @@ from dateutil import parser as date_parser
 
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.sql_review_service import SqlReviewService
-from app.services.wb_api import WildberriesAPI
+from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
 from config import settings

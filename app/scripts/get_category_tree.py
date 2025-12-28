@@ -6,7 +6,7 @@ from app.services.api_category_service import ApiCategoryService
 from app.services.rabbitmq import RabbitMQService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.sql_repository import SQLDatabaseRepository
-from app.services.wb_api import WildberriesAPI
+from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger, setup_logging
 from config import settings
 
@@ -38,7 +38,7 @@ async def insert_categories():
         )
 
         categories_tree = await api_category_service.create_categories_tree(
-            token=settings.DEFAULT_WB_TOKEN
+            token=settings.ADMIN_WB_TOKEN
         )
 
         logger.info(

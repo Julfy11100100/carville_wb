@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT: int = 30
     MAX_RETRIES: int = 5
 
-    # Дефолтный токен для получения например дерева категорий
-    DEFAULT_WB_TOKEN: str = ""
+    # Админский токен кабинета Carville WB
+    ADMIN_WB_TOKEN: str = ""
 
     # Настройки для поключения к RabbitMQ
     RABBITMQ_HOST: str = ""

@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 
-from app.services.wb_api import WildberriesAPI
+from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger
 
 logger = get_logger()

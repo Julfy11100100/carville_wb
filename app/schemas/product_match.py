@@ -23,7 +23,7 @@ class ProductMatchRequest(BaseModel):
         match = re.match(VALID_WB_FIELD_PATTERN, v)
         if v not in VALID_WB_FIELDS and not match:
             raise ValueError(
-                f"Недопустимое wb_match_field '{v}' Допустимые поля {','.join(VALID_WB_FIELDS)} "
+                f"Недопустимое wb_match_field '{v}' Допустимые поля {', '.join(VALID_WB_FIELDS)} "
                 f"Либо должен соответствовать паттерну '{VALID_WB_FIELD_PATTERN}'")
         return v
 
@@ -31,14 +31,14 @@ class ProductMatchRequest(BaseModel):
     def validate_carville_match_field(cls, v):
         if v not in VALID_CARVILLE_FIELDS:
             raise ValueError(
-                f"Недопустимое carville_match_field '{v}' Допустимые поля {','.join(VALID_CARVILLE_FIELDS)}")
+                f"Недопустимое carville_match_field '{v}' Допустимые поля {', '.join(VALID_CARVILLE_FIELDS)}")
         return v
 
     @field_validator('comparison_field')
     def validate_comparison_field(cls, v):
         if v not in VALID_COMPARISON_FIELDS:
             raise ValueError(
-                f"Недопустимое comparison_field '{v}' Допустимые поля {','.join(VALID_COMPARISON_FIELDS)}")
+                f"Недопустимое comparison_field '{v}' Допустимые поля {', '.join(VALID_COMPARISON_FIELDS)}")
         return v
 
     @field_validator('filter')

@@ -120,7 +120,7 @@ class ProductMatchService:
             # Храним списком на случай дубликатов (штрихкоды и т.п.)
             es_index: Dict[str, List[Dict[str, Any]]] = {}
             for product in products:
-                values = self._get_match_values(product, match_field)
+                values = self.get_match_values(product, match_field)
                 if values is None:
                     continue
 
@@ -240,7 +240,7 @@ class ProductMatchService:
         unique_values = set()
 
         for product in products:
-            values = self._get_match_values(product, match_field)
+            values = self.get_match_values(product, match_field)
             for value in values:
                 if value is not None:
                     unique_values.add(value)
@@ -336,7 +336,7 @@ class ProductMatchService:
             raise DatabaseError(f"Database procedure execution failed: {str(e)}")
 
     @staticmethod
-    def _get_match_values(product: Dict[str, Any], match_field: str) -> Optional[List[str]]:
+    def get_match_values(product: Dict[str, Any], match_field: str) -> Optional[List[str]]:
         """
         Получить значение для матчинга из документа Elasticsearch.
         """

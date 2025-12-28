@@ -174,7 +174,9 @@ class WildberriesAPI:
             "settings": {
                 "cursor": {
                     "limit": 1,
-                    "offset": 0
+                },
+                "filter": {
+                    "withPhoto": -1
                 }
             }
         }

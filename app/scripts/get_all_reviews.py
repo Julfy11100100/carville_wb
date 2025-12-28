@@ -6,7 +6,7 @@ from app.schemas.tg import EntityType, ActionType, NotificationStatus
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.review_service import ReviewService
 from app.services.rabbitmq import RabbitMQService
-from app.services.wb_api import WildberriesAPI
+from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger, setup_logging
 from config import settings
 
