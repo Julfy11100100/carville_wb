@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     ELASTICSEARCH_PASSWORD: str = ""
 
     # WB API настройки
-    # WB_CONTENT_API_URL: str = "https://content-api-sandbox.wildberries.ru"
     WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
 
     # HTTP клиент настройки
@@ -56,6 +55,8 @@ class Settings(BaseSettings):
 
     # Админский токен кабинета Carville WB
     ADMIN_WB_TOKEN: str = ""
+    # Настройки шлюза
+    GATEWAY_BASE_URL: str = "http://localhost:8000/"
 
     # Настройки для поключения к RabbitMQ
     RABBITMQ_HOST: str = ""

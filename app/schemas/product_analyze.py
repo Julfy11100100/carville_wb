@@ -44,10 +44,11 @@ class ProductAnalyzeItem(BaseModel):
     """Модель товара для анализа"""
     vendor_code: str = Field(..., description="ID товара в системе продавца")
     type_id: int = Field(..., description="ID типа товара")
+    name: Optional[str] = Field(..., description="Название товара")
 
     # oem: List[str] = Field(default_factory=list, description="OEM-номера товара")
     # cross: List[str] = Field(default_factory=list, description="Альтернативные артикулы товара")
-    # name: Optional[str] = Field(..., description="Название товара")
+
     # norma: Optional[str] = Field(None, description="Кратность покупки (опционально)")
 
 

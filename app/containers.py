@@ -4,6 +4,7 @@ from app.services.elasticsearch_service import ElasticsearchService
 from app.services.mongo_repository import init_mongo_client, init_mongo_collection, MongoRepository
 from app.services.product_analyze_service import ProductAnalyzeService
 from app.services.product_match_service import ProductMatchService
+from app.services.recommendation_service import RecommendationService
 from app.services.review_service import ReviewService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.sql_repository import SQLDatabaseRepository
@@ -96,8 +97,14 @@ class Container(containers.DeclarativeContainer):
         sql_service=sql_review_service
     )
 
+    recommendation_service = providers.Singleton(
+        RecommendationService,
+        sql_repository=sql_database_repository
+    )
+
     product_analyze_service = providers.Factory(
         ProductAnalyzeService,
         product_match_service=product_match_service,
-        elasticsearch_service=elasticsearch_service
+        elasticsearch_service=elasticsearch_service,
+        recommendation_service=recommendation_service
     )

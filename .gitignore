@@ -209,3 +209,5 @@ __marimo__/
 
 /app/data/products/*
 Logs/*
+app/logs/*
+app/scripts/logs/*

@@ -1,5 +1,6 @@
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.product_match_service import ProductMatchService
+from app.services.recommendation_service import RecommendationService
 from app.utils.logging import get_logger
 from app.utils.normalize import get_normalize_identifier
 from app.utils.token import hash_token
@@ -16,10 +17,12 @@ class ProductAnalyzeService:
     def __init__(
             self,
             product_match_service: ProductMatchService,
-            elasticsearch_service: ElasticsearchService
+            elasticsearch_service: ElasticsearchService,
+            recommendation_service: RecommendationService,
     ):
-        self.elasticsearch_service = elasticsearch_service
         self.product_match_service = product_match_service
+        self.elasticsearch_service = elasticsearch_service
+        self.recommendation_service = recommendation_service
 
     async def prepare_data(self, brand: str, token: str, carville_match_field: str, client_match_field: str):
         """
@@ -56,7 +59,11 @@ class ProductAnalyzeService:
             filtered_client_products, filtered_npr_products,
             carville_match_field, client_match_field
         )
-        products = await self._clean_products(missing_products)
+        # Шаг 4: получаем рекомендации для имени
+        name_recommendations = await self.recommendation_service.get_name_recommendations(
+            [product["vendorCode"] for product in missing_products])
+
+        products = await self._clean_products(missing_products, name_recommendations)
 
         return {
             "products": products,
@@ -190,7 +197,8 @@ class ProductAnalyzeService:
 
         return missing_products
 
-    async def _clean_products(self, missing_products: list[dict]) -> list[dict]:
+    @staticmethod
+    async def _clean_products(missing_products: list[dict], name_recommendations: dict) -> list[dict]:
         """
         Приводим товары к нужному виду
 
@@ -199,10 +207,24 @@ class ProductAnalyzeService:
         """
 
         products = []
+        without_name_recom = 0
+        without_npr_data = 0
+
         for product in missing_products:
+            vendor_code = product.get("vendorCode")
+
+            if name_recommendations[vendor_code] is None:
+                without_name_recom += 1
+                continue
+
             products.append({
                 "vendor_code": product.get("vendorCode"),
-                "type_id": product.get("subjectID")
+                "type_id": product.get("subjectID"),
+                "name": name_recommendations[vendor_code],
             })
+
+        logger.info(f"Товары после очистки {len(products)}")
+        logger.info(f"Товары без рекомендаций по названию: {without_name_recom}")
+        logger.info(f"Товары без данных NPR: {without_npr_data}")
 
         return products
