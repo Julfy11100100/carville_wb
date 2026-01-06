@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Union
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import HTTPException, Depends, APIRouter, Header, BackgroundTasks
@@ -291,7 +291,7 @@ async def create_products_update_task(
     - `status`: Фильтр по статусу (опционально)\n
     - `period`: Период в формате: 1h, 2d, 3w (опционально). Примеры: '1h' (последний час), '2d' (последние 2 дня), '3w' (последние 3 недели)
     """,
-    response_model=List[TaskInfoResponse]
+    response_model=Union[List[TaskInfoResponse], TaskInfoResponse]
 )
 @inject
 async def search_tasks(
@@ -315,7 +315,10 @@ async def search_tasks(
         if not tasks:
             return []
 
-        return [TaskInfoResponse.from_task_info(task) for task in tasks]
+        if len(tasks) > 1:
+            return [TaskInfoResponse.from_task_info(task) for task in tasks]
+
+        return TaskInfoResponse.from_task_info(tasks[0])
 
     except TaskDatabaseError as e:
         logger.error(f"Ошибка базы данных при поиске задач: {e}", exc_info=True)
@@ -417,6 +420,7 @@ async def match_products(
 
 @router.post(
     "/analyze",
+    tags=["products"],
     response_model=ProductAnalyzeResponse,
     summary="Анализ данных товаров",
     description="Анализ данных товаров по указанному бренду",

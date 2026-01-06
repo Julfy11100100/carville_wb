@@ -49,7 +49,6 @@ class ProductAnalyzeItem(BaseModel):
     # oem: List[str] = Field(default_factory=list, description="OEM-номера товара")
     # cross: List[str] = Field(default_factory=list, description="Альтернативные артикулы товара")
 
-    # norma: Optional[str] = Field(None, description="Кратность покупки (опционально)")
 
 
 class ProductAnalyzeResponse(BaseModel):
