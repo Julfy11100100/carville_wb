@@ -456,7 +456,7 @@ async def analyze_products(
 
         return ProductAnalyzeResponse(
             products=products["products"],
-            category_ids=None,
+            category_ids=products["category_ids"],
             total_products=products["total_products"]
         )
     except HTTPException:

@@ -16,7 +16,7 @@ services:
     ports:
       - "9200:9200"
     networks:
-      - marketplace_network
+      - dev_marketplace_network
     logging:
       options:
         max-size: "10m"
@@ -41,7 +41,7 @@ services:
     ports:
       - "${MONGO_PORT}:27017"
     networks:
-      - marketplace_network
+      - dev_marketplace_network
     logging:
       options:
         max-size: "10m"
@@ -67,7 +67,7 @@ services:
     ports:
       - "${PORT}:${PORT}"
     networks:
-      - marketplace_network
+      - dev_marketplace_network
     logging:
       options:
         max-size: "10m"
@@ -85,5 +85,5 @@ volumes:
   mongodb_data:
 
 networks:
-  marketplace_network:
-    driver: bridge
+  dev_marketplace_network:
+    external: true

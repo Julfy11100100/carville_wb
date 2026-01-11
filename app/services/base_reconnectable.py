@@ -161,6 +161,13 @@ class ReconnectableService(ABC):
             logger.warning(
                 f"Невозможно запланировать фоновое переподключение к {self.service_name} - нет активного event loop")
 
+    def schedule_background_reconnect(self) -> None:
+        """Безопасное планирование фонового переподключения"""
+        try:
+            asyncio.create_task(self.background_reconnect())
+        except RuntimeError:
+            logger.warning(f"Cannot schedule background reconnect for {self.service_name} - no running event loop")
+
     async def disconnect(self) -> None:
         """Отключение от сервиса"""
         try:

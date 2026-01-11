@@ -1,6 +1,8 @@
 from app.services.elasticsearch_service import ElasticsearchService
+from app.services.npr_product_service import NprProductService
 from app.services.product_match_service import ProductMatchService
 from app.services.recommendation_service import RecommendationService
+from app.services.sql_category_service import SqlCategoryService
 from app.utils.logging import get_logger
 from app.utils.normalize import get_normalize_identifier
 from app.utils.token import hash_token
@@ -19,10 +21,15 @@ class ProductAnalyzeService:
             product_match_service: ProductMatchService,
             elasticsearch_service: ElasticsearchService,
             recommendation_service: RecommendationService,
+            npr_product_service: NprProductService,
+            sql_category_service: SqlCategoryService
+
     ):
         self.product_match_service = product_match_service
         self.elasticsearch_service = elasticsearch_service
         self.recommendation_service = recommendation_service
+        self.npr_product_service = npr_product_service
+        self.sql_category_service = sql_category_service
 
     async def prepare_data(self, brand: str, token: str, carville_match_field: str, client_match_field: str):
         """
@@ -50,23 +57,39 @@ class ProductAnalyzeService:
                 filtered_client_products = []
             else:
                 raise
+
         # Шаг 2: получаем все наши товары и фильтруем по бренду и статусу
         filtered_npr_products = await self._get_products(
             hashed_admin_token, brand
         )
+
         # Шаг 3: собираем товары которых нет у клиента
         missing_products = await self._collect_missing_products(
             filtered_client_products, filtered_npr_products,
             carville_match_field, client_match_field
         )
+
         # Шаг 4: получаем рекомендации для имени
         name_recommendations = await self.recommendation_service.get_name_recommendations(
             [product["vendorCode"] for product in missing_products])
 
-        products = await self._clean_products(missing_products, name_recommendations)
+        # Шаг 5: получаем кросы и оемы
+        # передаем name_recommendations что бы не нагружать процедуру, товары без имени и так не подлежат созданию
+        npr_data = await self.npr_product_service.get_analyze_npr_data(
+            [k for k, v in name_recommendations.items() if v is not None], brand
+        )
+
+        # Шаг 6: Преобразуем товары в необходимый вид
+        products = await self._clean_products(missing_products, name_recommendations, npr_data)
+
+        # Шаг 7: строим дерево категорий и типов
+        tree = await self.sql_category_service.get_parents_category_by_id_categories(
+            [product["type_id"] for product in products if product]
+        )
 
         return {
             "products": products,
+            "category_ids": tree,
             "total_products": len(products)
         }
 
@@ -198,7 +221,7 @@ class ProductAnalyzeService:
         return missing_products
 
     @staticmethod
-    async def _clean_products(missing_products: list[dict], name_recommendations: dict) -> list[dict]:
+    async def _clean_products(missing_products: list[dict], name_recommendations: dict, npr_data: dict) -> list[dict]:
         """
         Приводим товары к нужному виду
 
@@ -217,9 +240,19 @@ class ProductAnalyzeService:
                 without_name_recom += 1
                 continue
 
+            npr_payload = npr_data.get(vendor_code, {})
+            if npr_payload is not None:
+                oem = npr_payload.get("oem")
+                cross_num = npr_payload.get("cross_num")
+            else:
+                without_npr_data += 1
+                continue
+
             products.append({
                 "vendor_code": product.get("vendorCode"),
                 "type_id": product.get("subjectID"),
+                "oem": [oem] if oem else [],
+                "cross": [cross_num] if cross_num else [],
                 "name": name_recommendations[vendor_code],
             })
 

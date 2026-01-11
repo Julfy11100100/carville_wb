@@ -24,6 +24,9 @@ class ElasticsearchService(ReconnectableService):
             settings.ELASTICSEARCH_PASSWORD,
         )
 
+    def record_failure(self):
+        self._record_failure()
+
     async def _connect(self):
         """Подключение к Elasticsearch"""
         if self.client:
