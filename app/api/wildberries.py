@@ -116,23 +116,16 @@ async def create_products_collection_task(
         wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
 ):
     try:
-        logger.info("Проверка наличия активной задачи сбора")
-
-        active_task = await task_manager.get_active_task_by_token(
-            wb_token=token,
-            task_type=TaskType.PRODUCTS_INFO
-        )
-        if active_task:
-            logger.info(
-                f"Активная задача уже существует: {active_task.task_id}, "
-                f"статус={active_task.status.value}, "
-                f"прогресс={active_task.processed_items}/{active_task.total_items}"
-            )
-            return TaskCreateResponse(
-                task_type=active_task.task_type,
-                task_id=active_task.task_id,
-                status=active_task.status,
-                message="Активная задача уже существует"
+        hash_wb_token = hash_token(token)
+        # Проверяем, не идет ли индексация
+        if await task_manager.is_client_indexing(token):
+            logger.warning(f"Идет индексирование для клиента {hash_wb_token} или администратора")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Идет индексация",
+                    "details": "В данный момент происходит индексация товаров. Пожалуйста, подождите немного и попробуйте снова."
+                }
             )
 
         logger.info("Создание новой задачи сбора товаров")
