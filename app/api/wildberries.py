@@ -411,7 +411,7 @@ async def match_products(
 
 
 @router.post(
-    "/analyze",
+    "/product/analyze",
     tags=["products"],
     response_model=ProductAnalyzeResponse,
     summary="Анализ данных товаров",
