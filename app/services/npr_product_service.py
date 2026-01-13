@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from app.services.elasticsearch_service import ElasticsearchService
 from app.utils.logging import get_logger
 from app.utils.normalize import get_normalize_identifier
+from config import settings
 
 logger = get_logger()
 
@@ -13,7 +14,7 @@ class NprProductService:
     def __init__(self, elasticsearch_service: ElasticsearchService):
         self.elasticsearch_service = elasticsearch_service
 
-    CLIENT_ID = "149610"
+    INDEX_NAME = settings.NPR_PRODUCTS_INDEX
     SOURCE_FIELDS = ["norm_code", "cross_codes_string", "oem_string", "ozon_price_clear"]
 
     async def get_analyze_npr_data(
@@ -126,12 +127,10 @@ class NprProductService:
         if client is None:
             return {}
 
-        index_name = f"web_api_products_{self.CLIENT_ID}"
-
         try:
-            exists = await client.indices.exists(index=index_name)
+            exists = await client.indices.exists(index=self.INDEX_NAME)
             if not exists:
-                logger.warning("Индекс %s отсутствует", index_name)
+                logger.warning("Индекс %s отсутствует", self.INDEX_NAME)
                 return {}
 
             query: Dict[str, Any] = {
@@ -151,7 +150,7 @@ class NprProductService:
                 "_source": self.SOURCE_FIELDS,
             }
 
-            response = await client.search(index=index_name, body=search_body)
+            response = await client.search(index=self.INDEX_NAME, body=search_body)
             documents = {}
             hits = response.get("hits", {}).get("hits", [])
 
@@ -169,7 +168,7 @@ class NprProductService:
 
             return documents
         except Exception as exc:
-            logger.error("Ошибка поиска в индексе %s: %s", index_name, exc)
+            logger.error("Ошибка поиска в индексе %s: %s", self.INDEX_NAME, exc)
             self.elasticsearch_service.record_failure()
             return {}
 

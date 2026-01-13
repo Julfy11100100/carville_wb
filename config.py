@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     REVIEWS_BASE_URL: str = "https://feedbacks-api.wildberries.ru"
     REVIEWS_ENDPOINT: str = "/api/v1/feedbacks"
 
+    # Индексы НПР и прочие
+    NPR_PRODUCTS_INDEX: str = "npr_products_data"
+    NPR_IMAGES_INDEX: str = "npr_images_data"
+
     class Config:
         env_file = f"{project_root}/.env"
 
