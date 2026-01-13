@@ -1,0 +1,2 @@
+*.sh -diff merge=union -text eol=lf
+
