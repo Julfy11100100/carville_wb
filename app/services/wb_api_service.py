@@ -477,7 +477,7 @@ class WildberriesAPI:
     async def upload_prices(
             self,
             token: str,
-            prices_data: Dict[str, List[Dict[str,  int | None]]]
+            prices_data: Dict[str, List[Dict[str, int | None]]]
     ) -> Dict[str, Any]:
         """
         Загружает цены товаров через Prices API.
@@ -489,13 +489,8 @@ class WildberriesAPI:
         Returns:
             {status: "success"|"error", data: {"uploadId": ...}, errors: [...]}
         """
-        if len(prices_data) > 1000:
-            raise ValueError(
-                f"Невозможно загрузить больше 1000 цен за запрос. "
-                f"Передано: {len(prices_data)}."
-            )
 
-        logger.info(f"Загрузка цен: {len(prices_data)} товаров")
+        logger.info(f"Загрузка цен: {len(prices_data['data'])} товаров")
 
         prices_api_url = settings.WB_PRICES_API_URL
 
@@ -511,5 +506,22 @@ class WildberriesAPI:
             success_transform=lambda r: WBErrorHandler.create_success_response(
                 data=r.get("data"),
                 errors=r.get("errors", [])
+            )
+        )
+
+    async def get_create_limits(
+            self,
+            token: str
+    ) -> Dict[str, Any]:
+        """Получение лимитов на создание товаров"""
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_create_limits",
+            api_call=lambda: self.make_request(
+                "GET",
+                "/content/v2/cards/limits",
+                token
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data")
             )
         )

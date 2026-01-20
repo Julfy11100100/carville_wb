@@ -8,6 +8,7 @@ from app.exceptions.task import TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
 from app.schemas.product_analyze import ProductAnalyzeResponse, ProductAnalyzeRequest
 from app.schemas.product_create import ProductCreateRequest
+from app.schemas.product_limit import ProductLimitResponse
 from app.schemas.product_match import ProductMatchRequest, ProductListMatchResponse, ProductMatchResponse
 from app.schemas.product_update import ProductUpdateRequest
 from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse, TaskInfoResponse
@@ -549,6 +550,39 @@ async def create_products_create_task(
 
     except Exception as e:
         logger.error(f"Неожиданная ошибка при создании задачи создания: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка сервера"
+        )
+
+
+@router.get(
+    "/product/limit",
+    tags=["products"],
+    summary="Получить лимиты товаров",
+    description="Получает лимиты на создание товаров",
+    response_model=ProductLimitResponse
+)
+@inject
+async def get_product_limit(
+        token: str = Depends(get_wb_token),
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
+):
+    """
+    Получить лимиты товаров
+    """
+    try:
+        api_result = await wb_client.get_create_limits(token)
+        result_data = api_result["data"]
+        filtered_result = {
+            "total": {
+                "limit": result_data.get("freeLimits") + result_data.get("paidLimits")
+            }
+        }
+        return filtered_result
+
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при получении лимитов на создание товаров: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"

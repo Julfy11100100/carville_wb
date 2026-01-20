@@ -1,7 +1,10 @@
 import asyncio
+import gc
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Set
+
+from watchfiles import awatch
 
 from app.constants.brands import BRANDS
 from app.exceptions.wb_api import WildberriesRateLimitError
@@ -52,6 +55,10 @@ class WildberriesClient:
 
         # SQL сервис
         self.category_service = sql_category_service
+
+    async def get_create_limits(self, token: str):
+        """Получение лимита на создание товаров"""
+        return await self.api.get_create_limits(token)
 
     async def get_product(self, token: str) -> Dict[str, Any]:
         """Получение одного товара"""
@@ -786,7 +793,6 @@ class WildberriesClient:
                     prepare_products.append(clean_product)
                 except Exception as err:
                     msg = f"Товар {vendor_code} имеет неполные данные: {err}"
-
                     failed_clean_product[vendor_code] = msg
 
             # логируем товары по которым не удалось подготовить данные для отправки
@@ -809,10 +815,11 @@ class WildberriesClient:
 
             # Группируем по subjectID
             wb_cards = self.group_by_subject_id(prepare_products)
+            wb_cards_len = len(wb_cards)
 
             logger.info(
                 f"[{task_info.task_id}] Сгруппировано: "
-                f"{len(prepare_products)} товаров → {len(wb_cards)} карточек"
+                f"{len(prepare_products)} товаров → {wb_cards_len} карточек"
             )
 
             # Разбиваем на батчи с учётом лимита вариантов
@@ -821,6 +828,15 @@ class WildberriesClient:
             logger.info(
                 f"[{task_info.task_id}] Создано {len(wb_batches)} батчей для отправки"
             )
+
+            # УДАЛЯЕМ ИЗ ПАМЯТИ НЕНУЖНЫЕ ДАННЫЕ es_products, wb_cards, prepare_products
+            es_products.clear()
+            del es_products
+            wb_cards.clear()
+            del wb_cards
+            prepare_products.clear()
+            del prepare_products
+            gc.collect()
 
             # ШАГ 3: Отправка на WB
             wb_batches_sent = 0
@@ -833,7 +849,7 @@ class WildberriesClient:
                 batch_variants_count = sum(len(card["variants"]) for card in batch)
 
                 logger.debug(
-                    f"[{task_info.task_id}] Пакет {batch_number}/{len(wb_batches)}: "
+                    f"[{task_info.task_id}] Батч загрузки товаров {batch_number}/{len(wb_batches)}: "
                     f"карточек={len(batch)}, товаров={batch_variants_count}"
                 )
 
@@ -846,7 +862,7 @@ class WildberriesClient:
                 # Проверяем статус
                 if create_result["status"] == "error":
                     logger.error(
-                        f"[{task_info.task_id}] Пакет {batch_number} ОШИБКА: "
+                        f"[{task_info.task_id}] Батч загрузки товаров {batch_number} ОШИБКА: "
                         f"{create_result['error']} (статус: {create_result.get('status_code')})"
                     )
                     task_info.status = TaskStatus.FAILED
@@ -859,7 +875,7 @@ class WildberriesClient:
                 task_info.processed_items = total_products_sent
 
                 logger.info(
-                    f"[{task_info.task_id}] Пакет {batch_number}/{len(wb_batches)}: "
+                    f"[{task_info.task_id}] Батч загрузки товаров {batch_number}/{len(wb_batches)}: "
                     f"отправлено успешно, карточек={len(batch)}, товаров={batch_variants_count}"
                 )
 
@@ -878,8 +894,12 @@ class WildberriesClient:
 
             logger.info(
                 f"[{task_info.task_id}] Все пакеты отправлены: "
-                f"батчей={wb_batches_sent}, карточек={len(wb_cards)}, товаров={total_products_sent}"
+                f"батчей={wb_batches_sent}, карточек={wb_cards_len}, товаров={total_products_sent}"
             )
+            # Удаляем wb_batches
+            wb_batches.clear()
+            del wb_batches
+            gc.collect()
 
             # ШАГ 3: ПРОВЕРКА РЕЗУЛЬТАТОВ СОЗДАНИЯ С ПОЛЛИНГОМ
 
@@ -947,6 +967,11 @@ class WildberriesClient:
                     task_info=task_info
                 )
 
+            # Удаляем картинки из памяти
+            images.clear()
+            del images
+            gc.collect()
+
             # ШАГ 6: ЗАГРУЖАЕМ ЦЕНЫ
             if successful_vendor_codes:
                 await self._upload_prices_for_successful_products(
@@ -956,6 +981,11 @@ class WildberriesClient:
                     npr_data=npr_data,
                     task_info=task_info
                 )
+
+            # Удаляем НПР данные из памяти
+            npr_data.clear()
+            del npr_data
+            gc.collect()
 
             # ШАГ 7: ФИНАЛЬНЫЙ СТАТУС
             if error_count > 0:
@@ -1896,7 +1926,7 @@ class WildberriesClient:
                 batches.append(batch)
 
             logger.info(
-                f"[{task_id}] Сформировано батчей: {len(batches)} "
+                f"[{task_id}] Сформировано батчей цен: {len(batches)} "
                 f"(размер батча={WB_PRICES_BATCH_SIZE})"
             )
 
@@ -1924,7 +1954,7 @@ class WildberriesClient:
 
             for batch_idx, batch in enumerate(batches, start=1):
                 logger.info(
-                    f"[{task_id}] Загрузка батча {batch_idx}/{len(batches)}: "
+                    f"[{task_id}] Загрузка батча цены {batch_idx}/{len(batches)}: "
                     f"товаров={len(batch)}"
                 )
 
@@ -1948,8 +1978,8 @@ class WildberriesClient:
                             processed_nm_ids.add(nm_id)
 
                         logger.info(
-                            f"[{task_id}] Батч {batch_idx}/{len(batches)} успешно загружен: "
-                            f"товаров={batch_success_count}, uploadID={result.get('data', {}).get('uploadId')}"
+                            f"[{task_id}] Батч цен {batch_idx}/{len(batches)} успешно загружен: "
+                            f"товаров={batch_success_count}"
                         )
                     else:
                         # Ошибка API для всего батча
@@ -1964,7 +1994,7 @@ class WildberriesClient:
                             upload_errors[str_nm_id] = error
 
                         logger.warning(
-                            f"[{task_id}] Батч {batch_idx}/{len(batches)} не удался: "
+                            f"[{task_id}] Батч цен {batch_idx}/{len(batches)} не удался: "
                             f"товаров={len(batch)}, ошибка={error}"
                         )
 
@@ -1981,7 +2011,7 @@ class WildberriesClient:
                         upload_errors[str_nm_id] = error_msg
 
                     logger.error(
-                        f"[{task_id}] Батч {batch_idx}/{len(batches)} исключение: "
+                        f"[{task_id}] Батч цен {batch_idx}/{len(batches)} исключение: "
                         f"товаров={len(batch)}, ошибка={error_msg}",
                         exc_info=True
                     )
