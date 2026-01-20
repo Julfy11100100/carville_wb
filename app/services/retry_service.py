@@ -20,7 +20,7 @@ class RetryService:
     ):
         """Выполняет операцию с повторными попытками при ошибках.
 
-        Для 4xx ошибок — raise БЕЗ traceback.
+        Для 4xx ошибок (кроме retryable) — raise БЕЗ traceback.
         Для 5xx и сетевых — retry с логированием.
         """
         if retryable_statuses is None:
@@ -45,43 +45,54 @@ class RetryService:
                 last_error = e
                 last_status_code = RetryService._extract_status_code(e)
                 error_msg = str(e)
-                is_client_error = (last_status_code and 400 <= last_status_code < 500)
 
-                # КЛЮЧЕВОЕ: для 4xx — raise БЕЗ обработки traceback
+                # Проверяем retryable статус ДО проверки is_client_error
+                is_retryable_status = (
+                    last_status_code in retryable_statuses
+                    if last_status_code
+                    else False
+                )
+
+                is_client_error = (
+                        last_status_code
+                        and 400 <= last_status_code < 500
+                        and not is_retryable_status  # Исключаем 429 и другие retryable
+                )
+
+                # Для 4xx (кроме retryable) — raise БЕЗ traceback
                 if is_client_error:
-                    # Suppress traceback and raise immediately
                     raise e.with_traceback(None)
 
-                # Для остальных ошибок — логируем и retry
+                # Для retryable ошибок — проверяем retry
                 should_retry = RetryService._should_retry(
                     error_msg,
                     last_status_code,
                     retryable_statuses
                 )
 
-                if should_retry:
+                if should_retry and attempt < max_retries - 1:
                     logger.warning(
                         f"{operation_name} attempt {attempt + 1}/{max_retries} failed: "
                         f"status={last_status_code}, retrying..."
                     )
-                    if attempt < max_retries - 1:
-                        continue
+                    continue
 
                 # Финальная ошибка
-                logger.warning(
-                    f"{operation_name} attempt {attempt + 1}/{max_retries} failed: "
-                    f"status={last_status_code}"
+                logger.error(
+                    f"{operation_name} failed after {attempt + 1} attempts: "
+                    f"status={last_status_code}, error={error_msg}"
                 )
 
-                if attempt == max_retries - 1:
-                    if not last_status_code:
-                        logger.error(
-                            f"{operation_name} failed after {max_retries} attempts: {error_msg}",
-                            exc_info=True
-                        )
-                    break
+                if attempt == max_retries - 1 and not last_status_code:
+                    logger.error(
+                        f"{operation_name} failed after {max_retries} attempts",
+                        exc_info=True
+                    )
 
-        raise last_error
+        if last_error:
+            raise last_error
+        else:
+            raise RuntimeError(f"{operation_name} failed without exception")
 
     @staticmethod
     def _extract_status_code(exception: Exception) -> Optional[int]:

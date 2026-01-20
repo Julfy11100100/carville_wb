@@ -1,4 +1,3 @@
-import logging
 from typing import Dict, Any, Optional, Callable, Awaitable
 
 import aiohttp
@@ -12,6 +11,8 @@ logger = get_logger()
 
 class WBErrorHandler:
     """Обработчик ошибок Wildberries API."""
+
+    RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
     @staticmethod
     def extract_wb_error_data(
@@ -111,9 +112,19 @@ class WBErrorHandler:
         except WildberriesAPIError as e:
             status_code = getattr(e, 'status_code', None)
             response_data = getattr(e, 'response_data', None)
+
+            # ВАЖНО: для retryable статусов - пробрасываем исключение
+            # чтобы RetryService мог обработать retry
+            if status_code in WBErrorHandler.RETRYABLE_STATUS_CODES:
+                logger.debug(
+                    f"{operation_name} got retryable status {status_code}, "
+                    f"re-raising for retry"
+                )
+                raise  # Пробрасываем для retry
+
             logger.error(
-                f"{operation_name} failed: WB API Error {status_code}",
-                extra={"status_code": status_code, "error_data": response_data}
+                f"{operation_name} failed: WB API Error {status_code} "
+                f"error_data: {response_data}",
             )
             return WBErrorHandler.create_error_response(
                 e,

@@ -76,12 +76,13 @@ class WildberriesAPI:
             method: str,
             endpoint: str,
             token: str,
+            base_url_override: Optional[str] = None,
             **kwargs
     ) -> Dict[str, Any]:
         """Выполняет HTTP-запрос с rate limiting и retry-логикой."""
         await self._ensure_session()
 
-        url = f"{self.base_url}{endpoint}"
+        url = f"{base_url_override}{endpoint}" if base_url_override else f"{self.base_url}{endpoint}"
         headers = self._get_headers(token)
 
         if 'headers' in kwargs:
@@ -161,8 +162,6 @@ class WildberriesAPI:
                 f"Неожиданная ошибка: {e}",
                 response_data={"original_error": str(e)}
             )
-
-    # ==================== МЕТОДЫ С ERRORHANDLER ====================
 
     async def get_product(self, token: str) -> Dict[str, Any]:
         """Получение одного товара с обработкой ошибок """
@@ -468,6 +467,46 @@ class WildberriesAPI:
                 "/content/v3/media/save",
                 token,
                 json=upload_data
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data"),
+                errors=r.get("errors", [])
+            )
+        )
+
+    async def upload_prices(
+            self,
+            token: str,
+            prices_data: Dict[str, List[Dict[str,  int | None]]]
+    ) -> Dict[str, Any]:
+        """
+        Загружает цены товаров через Prices API.
+
+        Args:
+            token: API токен
+            prices_data: [{"nmId": 123, "price": 1999}, ...]
+
+        Returns:
+            {status: "success"|"error", data: {"uploadId": ...}, errors: [...]}
+        """
+        if len(prices_data) > 1000:
+            raise ValueError(
+                f"Невозможно загрузить больше 1000 цен за запрос. "
+                f"Передано: {len(prices_data)}."
+            )
+
+        logger.info(f"Загрузка цен: {len(prices_data)} товаров")
+
+        prices_api_url = settings.WB_PRICES_API_URL
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB upload_prices",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/api/v2/upload/task",
+                token,
+                json=prices_data,
+                base_url_override=prices_api_url
             ),
             success_transform=lambda r: WBErrorHandler.create_success_response(
                 data=r.get("data"),

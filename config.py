@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # WB API настройки
     WB_CONTENT_API_URL: str = "https://content-api.wildberries.ru"
+    WB_PRICES_API_URL: str = "https://discounts-prices-api.wildberries.ru"
 
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30

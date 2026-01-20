@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Set
 
 from app.constants.brands import BRANDS
@@ -770,7 +770,7 @@ class WildberriesClient:
             # Получаем рекомендации по именам и описанию
             rec_names = await self.recommendation_service.get_name_recommendations(vendor_codes)
             rec_descriptions = await self.recommendation_service.get_description_recommendations(vendor_codes)
-            # Получаем кросы и оемы
+            # Получаем кросы, оемы, bar_codes, prices
             npr_data = await self.npr_product_service.get_create_npr_data(vendor_codes)
 
             # Подготавливаем данные
@@ -900,59 +900,76 @@ class WildberriesClient:
             task_info.metadata["check_results"] = check_result
             task_info.metadata["check_completed_at"] = datetime.now().isoformat()
 
-            # ШАГ 4: ОПРЕДЕЛЯЕМ УСПЕШНЫЕ ТОВАРЫ И ЗАГРУЖАЕМ КАРТИНКИ
-
-            if check_result.get("checked"):
-                error_count = check_result.get("error_count", 0)
-                success_count = check_result.get("success_count", 0)
-
-                logger.info(
-                    f"[{task_info.task_id}] Проверка завершена: "
-                    f"успешно={success_count}, ошибок={error_count}, "
-                    f"попыток={check_result.get('polling_attempts', 0)}"
-                )
-
-                # Определяем успешные товары (БЕЗ ошибок)
-                error_vendor_codes = set(check_result.get("error_vendor_codes", []))
-                successful_vendor_codes = [
-                    vc for vc in vendor_codes
-                    if vc not in error_vendor_codes
-                ]
-
-                logger.info(
-                    f"[{task_info.task_id}] Успешно созданы товары: "
-                    f"количество={len(successful_vendor_codes)}"
-                )
-
-                # Если есть успешные товары - загружаем картинки
-                if successful_vendor_codes:
-                    await self._upload_images_for_successful_products(
-                        token=token,
-                        task_id=task_info.task_id,
-                        successful_vendor_codes=successful_vendor_codes,
-                        images=images,
-                        task_info=task_info
-                    )
-
-                # ШАГ 5: ФИНАЛЬНЫЙ СТАТУС
-                if error_count > 0:
-                    task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
-                    logger.warning(
-                        f"[{task_info.task_id}] Создание завершено с ошибками: "
-                        f"пакетов={wb_batches_sent}, товаров={total_products_sent}, "
-                        f"ошибок={error_count}"
-                    )
-                else:
-                    task_info.status = TaskStatus.COMPLETED
-                    logger.info(
-                        f"[{task_info.task_id}] Создание завершено успешно: "
-                        f"пакетов={wb_batches_sent}, товаров={total_products_sent}"
-                    )
-            else:
+            # ШАГ 4: ОПРЕДЕЛЯЕМ УСПЕШНЫЕ ТОВАРЫ
+            if not check_result.get("checked"):
                 task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
                 logger.warning(
                     f"[{task_info.task_id}] Проверка не завершена: "
                     f"причина={check_result.get('reason')}"
+                )
+                return
+
+            error_count = check_result.get("error_count", 0)
+            success_count = check_result.get("success_count", 0)
+
+            logger.info(
+                f"[{task_info.task_id}] Проверка завершена: "
+                f"успешно={success_count}, ошибок={error_count}, "
+                f"попыток={check_result.get('polling_attempts', 0)}"
+            )
+
+            # Определяем успешные товары (БЕЗ ошибок)
+            error_vendor_codes = set(check_result.get("error_vendor_codes", []))
+            successful_vendor_codes = [
+                vc for vc in vendor_codes
+                if vc not in error_vendor_codes
+            ]
+
+            logger.info(
+                f"[{task_info.task_id}] Успешно созданы товары: "
+                f"количество={len(successful_vendor_codes)}"
+            )
+            # Получаем данные по загруженным карточкам {vendor_code: nm_id}
+            vendor_codes_to_nm_id = await self.get_recent_nmids_for_vendor_codes(
+                token=token,
+                successful_vendor_codes=successful_vendor_codes,
+                hours=1,
+                limit=len(successful_vendor_codes)
+            )
+
+            # ШАГ 5: ЗАГРУЖАЕМ КАРТИНКИ ЕСЛИ ЕСТЬ УСПЕШНЫЕ
+            if successful_vendor_codes:
+                await self._upload_images_for_successful_products(
+                    token=token,
+                    task_id=task_info.task_id,
+                    vendor_codes_to_nm_id=vendor_codes_to_nm_id,
+                    images=images,
+                    task_info=task_info
+                )
+
+            # ШАГ 6: ЗАГРУЖАЕМ ЦЕНЫ
+            if successful_vendor_codes:
+                await self._upload_prices_for_successful_products(
+                    token=token,
+                    task_id=task_info.task_id,
+                    vendor_codes_to_nm_id=vendor_codes_to_nm_id,
+                    npr_data=npr_data,
+                    task_info=task_info
+                )
+
+            # ШАГ 7: ФИНАЛЬНЫЙ СТАТУС
+            if error_count > 0:
+                task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
+                logger.warning(
+                    f"[{task_info.task_id}] Создание завершено с ошибками: "
+                    f"пакетов={wb_batches_sent}, товаров={total_products_sent}, "
+                    f"ошибок={error_count}"
+                )
+            else:
+                task_info.status = TaskStatus.COMPLETED
+                logger.info(
+                    f"[{task_info.task_id}] Создание завершено успешно: "
+                    f"пакетов={wb_batches_sent}, товаров={total_products_sent}"
                 )
 
             task_info.metadata["creation_completed_at"] = datetime.now().isoformat()
@@ -1358,14 +1375,143 @@ class WildberriesClient:
             "error_batches": relevant_errors
         }
 
+    async def get_recent_nmids_for_vendor_codes(
+            self,
+            token: str,
+            successful_vendor_codes: List[str],
+            hours: int = 1,
+            limit: int = 100,
+    ) -> Dict[str, int]:
+        """
+        Возвращает {vendorCode: nmID} для карточек,
+        обновлённых за последние `hours` часов
+        и присутствующих в successful_vendor_codes.
+        """
+        # 1. Считаем порог по времени (UTC)
+        now_utc = datetime.now(timezone.utc)
+        updated_from = now_utc - timedelta(hours=hours)
+
+        logger.info(
+            f"Запуск get_recent_nmids_for_vendor_codes: "
+            f"hours={hours}, limit={limit}, updated_from={updated_from.isoformat()}, "
+            f"successful_vendor_codes={len(successful_vendor_codes)}"
+        )
+
+        target_codes = set(successful_vendor_codes)
+        result = {}
+
+        cursor_updated_at = None
+        cursor_nmid = None
+        page = 0
+
+        while True:
+            cursor: Dict[str, Any] = {"limit": limit}
+            if cursor_updated_at is not None and cursor_nmid is not None:
+                cursor["updatedAt"] = cursor_updated_at
+                cursor["nmID"] = cursor_nmid
+                logger.debug(
+                    f"Следующая страница: cursor.updatedAt={cursor_updated_at}, "
+                    f"cursor.nmID={cursor_nmid}, limit={limit}"
+                )
+            else:
+                logger.debug(f"Первая страница: limit={limit}, без cursor.updatedAt/nmID")
+
+            page += 1
+            logger.info(f"Запрос страницы {page} списка актуальных карточек (limit={limit})")
+
+            response = await self.api.get_products_page(
+                token=token,
+                cursor=cursor
+            )
+
+            if response["status"] == "error":
+                logger.warning(
+                    f"Получили статус error при запросе списка актуальных карточек на странице {page}: "
+                    f"{response.get('error')}"
+                )
+                return result
+
+            cards = response.get("cards") or []
+            cursor_resp = response.get("cursor") or {}
+
+            logger.info(
+                f"Получено карточек: {len(cards)} на странице {page}, "
+                f"уже найдено совпадений: {len(result)} из {len(target_codes)}"
+            )
+
+            # 2. Обрабатываем карточки
+            matched_on_page = 0
+            for card in cards:
+                vendor_code = card.get("vendorCode")
+                nmid = card.get("nmID")
+                if not vendor_code or nmid is None:
+                    continue
+
+                if vendor_code in target_codes and vendor_code not in result:
+                    result[vendor_code] = nmid
+                    matched_on_page += 1
+
+            if matched_on_page:
+                logger.info(
+                    f"На странице {page} найдено {matched_on_page} новых совпадений vendorCode→nmID, "
+                    f"всего найдено: {len(result)}"
+                )
+
+            # 3. Обновляем курсор
+            cursor_updated_at = cursor_resp.get("updatedAt")
+            cursor_nmid = cursor_resp.get("nmID")
+            total = cursor_resp.get("total", 0)
+
+            logger.debug(
+                f"Ответ cursor: updatedAt={cursor_updated_at}, nmID={cursor_nmid}, "
+                f"total={total} (page={page})"
+            )
+
+            # 4. Остановка по размеру страницы
+            if total < limit:
+                logger.info(
+                    f"Остановка пагинации: total ({total}) < limit ({limit}) на странице {page}"
+                )
+                break
+
+            # 5. Остановка по времени (если ушли за пределы окна hours)
+            if cursor_updated_at:
+                try:
+                    current_dt = datetime.fromisoformat(cursor_updated_at.replace("Z", "+00:00"))
+                    if current_dt < updated_from:
+                        logger.info(
+                            f"Остановка пагинации по времени: cursor.updatedAt={current_dt.isoformat()} < "
+                            f"updated_from={updated_from.isoformat()} (page={page})"
+                        )
+                        break
+                except ValueError:
+                    logger.warning(
+                        f"Не удалось распарсить cursor.updatedAt='{cursor_updated_at}', "
+                        f"продолжаем только по total/limit (page={page})"
+                    )
+
+            # 6. Если нашли все коды — тоже можно завершить
+            if len(result) == len(target_codes):
+                logger.info(
+                    f"Найдены все vendorCode ({len(result)} из {len(target_codes)}), "
+                    f"завершаем на странице {page}"
+                )
+                break
+
+        logger.info(
+            f"Завершение get_recent_nmids_for_vendor_codes: найдено {len(result)} соответствий "
+            f"из {len(target_codes)} целевых кодов"
+        )
+        return result
+
     @staticmethod
     def _clean_product_document(
             vendor_code: str,
             es_product: Dict[str, Any],
             recommendation_name: str,
             recommendation_description: str,
-            npr_data: dict,
-            image: dict
+            npr_data: Dict,
+            image: List
 
     ) -> Dict[str, Any]:
         """
@@ -1418,7 +1564,7 @@ class WildberriesClient:
             clean_product["dimensions"] = es_product.get("dimensions")
 
         # вытаскиваем характеристики из нашего товара
-        characteristics: list[dict] = es_product.get("characteristics")
+        characteristics = es_product.get("characteristics")
         if characteristics:
             # Удаляем ОЕМ характеристику 4572490 и характеристику артикула 5522881
             delete_characteristics = (4572490, 5522881)
@@ -1438,8 +1584,7 @@ class WildberriesClient:
         })
 
         # Заполняем данные из НПР если есть
-        vendor_data = npr_data.get(vendor_code, {})
-        oem_list = vendor_data.get("oem", None)
+        oem_list = npr_data.get("oem", None)
         if oem_list:
             clean_product["characteristics"].append({
                 "id": 4572490,
@@ -1448,25 +1593,18 @@ class WildberriesClient:
             })
 
         # Добавляем поле 'sizes'
-        bar_code = vendor_data.get("bar_code")
-        if bar_code:
-            clean_product["sizes"] = [
-                {
-                    "chrtID": 70457854,
-                    "techSize": "0",
-                    "wbSize": "",
-                    "skus": [
-                        bar_code
-                    ]
-                }
-            ],
+        bar_code = npr_data.get("bar_code")
+        sizes = es_product.get("sizes")
+        if bar_code and sizes:
+            sizes[0]["skus"] = [bar_code]
+            clean_product["sizes"] = sizes
 
         return clean_product
 
     async def _get_images_for_vendor_codes(
             self,
             products: Dict[str, Any],
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> Dict[str, List]:
         """
         Получить изображения для списка vendor_codes из Elasticsearch.
         Затем составить массив изображений, если есть.
@@ -1475,14 +1613,9 @@ class WildberriesClient:
             products: Список карточек из Elasticsearch
 
         Returns:
-            {'vendor_code': {"nm_id", "links"}}
+            {'vendor_code': ["links"]}
         """
-        # Для сопоставления vendor_code → nm_id
-        vendor_codes_to_nm_id = {
-            vendor_code: product.get("nmID")
-            for vendor_code, product in products.items()
-        }
-        vendor_codes = [str(key) for key in vendor_codes_to_nm_id.keys()]
+        vendor_codes = [vendor_code for vendor_code in products.keys()]
         logger.info(f"Получение изображений для {len(vendor_codes)} vendor_codes")
 
         # Получаем изображения из Elasticsearch
@@ -1504,12 +1637,6 @@ class WildberriesClient:
         found_vendor_codes = set()
 
         for vendor_code, images_list in images.items():
-            nm_id = vendor_codes_to_nm_id.get(vendor_code)
-
-            if not nm_id:
-                logger.debug(f"Пропущен vendor_code={vendor_code}: нет nm_id")
-                continue
-
             # Собираем ссылки
             format34_links = [
                 img.get("LINK")
@@ -1518,7 +1645,7 @@ class WildberriesClient:
             ]
 
             if format34_links:
-                images_dict[vendor_code] = {"nm_id": nm_id, "links": format34_links}
+                images_dict[vendor_code] = format34_links
                 found_vendor_codes.add(vendor_code)
 
         # Статистика
@@ -1548,8 +1675,8 @@ class WildberriesClient:
             self,
             token: str,
             task_id: str,
-            successful_vendor_codes: List[str],
-            images: Dict[str, Dict[str, Any]],
+            vendor_codes_to_nm_id: Dict[str, int],
+            images: Dict[str, List],
             task_info: TaskInfo
     ) -> None:
         """
@@ -1558,15 +1685,20 @@ class WildberriesClient:
         try:
             logger.info(
                 f"[{task_id}] Начало загрузки картинок: "
-                f"товаров={len(successful_vendor_codes)}"
+                f"товаров={len(vendor_codes_to_nm_id.keys())}"
             )
 
             # ШАГ 1: Проверяем необходимые картинки
-            images_by_nm_id = {
-                i.get("nm_id"): i.get("links")
-                for vendor_code, i in images.items()
-                if vendor_code in successful_vendor_codes
-            }
+            images_vendor_codes = images.keys()
+            images_by_nm_id = {}
+            for vendor_code, nm_id in vendor_codes_to_nm_id.items():
+                if vendor_code not in images_vendor_codes:
+                    continue
+
+                if not images_by_nm_id.get(nm_id, None):
+                    images_by_nm_id[nm_id] = []
+
+                images_by_nm_id[nm_id].extend(images[vendor_code])
 
             total_images = sum(len(imgs) for imgs in images_by_nm_id.values())
             logger.info(
@@ -1575,8 +1707,6 @@ class WildberriesClient:
             )
 
             # ШАГ 2: Подготавливаем данные для API
-            logger.debug(f"[{task_id}] Преобразование в формат API v3")
-
             images_upload_summary = {}
             upload_data_list = []
 
@@ -1603,7 +1733,7 @@ class WildberriesClient:
 
             if not upload_data_list:
                 logger.warning(
-                    f"[{task_id}] Не удалось подготовить задачи загрузки"
+                    f"[{task_id}] Не удалось подготовить картинки для загрузки"
                 )
                 task_info.metadata["images_upload_status"] = "PREPARATION_FAILED"
                 await self.task_manager.save_task(task_info)
@@ -1712,4 +1842,190 @@ class WildberriesClient:
             )
             task_info.metadata["images_upload_status"] = "ERROR"
             task_info.metadata["images_upload_error"] = str(e)
+            await self.task_manager.save_task(task_info)
+
+    async def _upload_prices_for_successful_products(
+            self,
+            token: str,
+            task_id: str,
+            vendor_codes_to_nm_id: Dict[str, int],
+            npr_data: Dict[str, Dict],
+            task_info: TaskInfo
+    ) -> None:
+        """
+        Загружает цены для успешно созданных товаров.
+
+        Args:
+            token: WB API токен
+            task_id: ID задачи
+            vendor_codes_to_nm_id: Маппинг {vendor_code: nmID}
+            npr_data: Данные NPR {vendor_code: {"price": ..., ...}}
+            task_info: Объект задачи
+        """
+        try:
+            logger.info(
+                f"[{task_id}] Начало загрузки цен: "
+                f"товаров={len(vendor_codes_to_nm_id)}"
+            )
+
+            # ШАГ 1: Подготавливаем данные цен по nmID
+            prices_by_nm_id = {}
+
+            for vendor_code, nm_id in vendor_codes_to_nm_id.items():
+                vendor_npr = npr_data[vendor_code]
+                price = vendor_npr.get("price")
+
+                # Сохраняем цену по nmID
+                prices_by_nm_id[nm_id] = price
+
+            logger.info(
+                f"[{task_id}] Подготовлено цен: {len(prices_by_nm_id)} товаров"
+            )
+
+            # ШАГ 2: Формируем батчи для API (макс 1000 товаров за запрос)
+            WB_PRICES_BATCH_SIZE = 1000
+
+            prices_list = [
+                {"nmId": nm_id, "price": price}
+                for nm_id, price in prices_by_nm_id.items()
+            ]
+
+            batches = []
+            for i in range(0, len(prices_list), WB_PRICES_BATCH_SIZE):
+                batch = prices_list[i:i + WB_PRICES_BATCH_SIZE]
+                batches.append(batch)
+
+            logger.info(
+                f"[{task_id}] Сформировано батчей: {len(batches)} "
+                f"(размер батча={WB_PRICES_BATCH_SIZE})"
+            )
+
+            # ШАГ 3: Инициализация трекинга
+            prices_upload_summary = {}
+            for nm_id in prices_by_nm_id.keys():
+                prices_upload_summary[str(nm_id)] = {
+                    "price": prices_by_nm_id[nm_id],
+                    "status": "PENDING"
+                }
+
+            task_info.metadata["prices_upload_started_at"] = datetime.now().isoformat()
+            task_info.metadata["prices_upload_summary"] = prices_upload_summary
+
+            # ШАГ 4: Выполняем загрузку батчами
+            logger.info(
+                f"[{task_id}] Начало загрузки цен (батчами): "
+                f"батчей={len(batches)}, товаров={len(prices_list)}"
+            )
+
+            successful_uploads = 0
+            failed_uploads = 0
+            upload_errors = {}
+            processed_nm_ids = set()
+
+            for batch_idx, batch in enumerate(batches, start=1):
+                logger.info(
+                    f"[{task_id}] Загрузка батча {batch_idx}/{len(batches)}: "
+                    f"товаров={len(batch)}"
+                )
+
+                try:
+                    # Отправляем батч цен в WB API
+                    result = await self.api.upload_prices(
+                        token=token,
+                        prices_data={"data": batch}
+                    )
+
+                    # Проверяем результат
+                    if isinstance(result, dict) and result.get("status") == "success":
+                        # Успешная загрузка всего батча
+                        batch_success_count = len(batch)
+                        successful_uploads += batch_success_count
+
+                        for item in batch:
+                            nm_id = item["nmId"]
+                            str_nm_id = str(nm_id)
+                            prices_upload_summary[str_nm_id]["status"] = "SUCCESS"
+                            processed_nm_ids.add(nm_id)
+
+                        logger.info(
+                            f"[{task_id}] Батч {batch_idx}/{len(batches)} успешно загружен: "
+                            f"товаров={batch_success_count}, uploadID={result.get('data', {}).get('uploadId')}"
+                        )
+                    else:
+                        # Ошибка API для всего батча
+                        error = result.get("error", "Unknown error") if isinstance(result, dict) else str(result)
+                        failed_uploads += len(batch)
+
+                        for item in batch:
+                            nm_id = item["nmId"]
+                            str_nm_id = str(nm_id)
+                            prices_upload_summary[str_nm_id]["status"] = "FAILED"
+                            prices_upload_summary[str_nm_id]["error"] = error
+                            upload_errors[str_nm_id] = error
+
+                        logger.warning(
+                            f"[{task_id}] Батч {batch_idx}/{len(batches)} не удался: "
+                            f"товаров={len(batch)}, ошибка={error}"
+                        )
+
+                except Exception as e:
+                    # Исключение при загрузке батча
+                    error_msg = str(e)
+                    failed_uploads += len(batch)
+
+                    for item in batch:
+                        nm_id = item["nmId"]
+                        str_nm_id = str(nm_id)
+                        prices_upload_summary[str_nm_id]["status"] = "EXCEPTION"
+                        prices_upload_summary[str_nm_id]["error"] = error_msg
+                        upload_errors[str_nm_id] = error_msg
+
+                    logger.error(
+                        f"[{task_id}] Батч {batch_idx}/{len(batches)} исключение: "
+                        f"товаров={len(batch)}, ошибка={error_msg}",
+                        exc_info=True
+                    )
+
+                # Задержка между батчами
+                if batch_idx < len(batches):
+                    await asyncio.sleep(1.0)
+
+                # Сохраняем прогресс
+                task_info.metadata["prices_upload_summary"] = prices_upload_summary
+                task_info.metadata["prices_upload_progress"] = {
+                    "current_batch": batch_idx,
+                    "total_batches": len(batches),
+                    "successful": successful_uploads,
+                    "failed": failed_uploads
+                }
+                await self.task_manager.save_task(task_info)
+
+            # ШАГ 5: Сохраняем финальные результаты
+            task_info.metadata["prices_upload_status"] = "COMPLETED"
+            task_info.metadata["prices_upload_completed_at"] = datetime.now().isoformat()
+            task_info.metadata["prices_upload_summary"] = prices_upload_summary
+            task_info.metadata["prices_upload_stats"] = {
+                "successful": successful_uploads,
+                "failed": failed_uploads,
+                "total": len(prices_list)
+            }
+
+            if upload_errors:
+                task_info.metadata["prices_upload_errors"] = upload_errors
+
+            logger.info(
+                f"[{task_id}] Загрузка цен завершена: "
+                f"успешно={successful_uploads}, ошибок={failed_uploads}, "
+                f"всего={len(prices_list)}"
+            )
+
+            await self.task_manager.save_task(task_info)
+
+        except Exception as e:
+            logger.error(
+                f"[{task_id}] Критическая ошибка при загрузке цен: {str(e)}",
+                exc_info=True
+            )
+            task_info.metadata["prices_upload_status"] = "ERROR"
+            task_info.metadata["prices_upload_error"] = str(e)
             await self.task_manager.save_task(task_info)
