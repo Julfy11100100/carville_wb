@@ -70,14 +70,6 @@ class Container(containers.DeclarativeContainer):
         sql_repository=sql_database_repository
     )
 
-    wildberries_client = providers.Factory(
-        WildberriesClient,
-        task_manager=task_manager,
-        elasticsearch_service=elasticsearch_service,
-        api_client=wildberries_api,
-        sql_category_service=sql_category_service
-    )
-
     review_api = providers.Singleton(
         WildberriesAPI,
         base_url=config.REVIEWS_BASE_URL,
@@ -115,4 +107,14 @@ class Container(containers.DeclarativeContainer):
         recommendation_service=recommendation_service,
         npr_product_service=npr_product_service,
         sql_category_service=sql_category_service
+    )
+
+    wildberries_client = providers.Factory(
+        WildberriesClient,
+        task_manager=task_manager,
+        elasticsearch_service=elasticsearch_service,
+        api_client=wildberries_api,
+        sql_category_service=sql_category_service,
+        recommendation_service=recommendation_service,
+        npr_product_service=npr_product_service
     )

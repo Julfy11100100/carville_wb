@@ -1016,3 +1016,113 @@ class ElasticsearchService(ReconnectableService):
                 "next_cursor": None,
                 "error": str(e)
             }
+
+    # ЛОГИКА ДЛЯ ИЗОБРАЖЕНИЙ
+    # =========================================================================
+
+    async def get_images_by_vendor_codes(
+            self,
+            vendor_codes: List[str],
+            size: int = 10000
+    ) -> Dict[str, Any]:
+        """
+        Получить изображения по списку vendor_codes из индекса npr_images_data.
+
+        Args:
+            vendor_codes: Список vendor_codes (артикулов продавца)
+            size: Максимальное количество результатов (по умолчанию 10000)
+
+        Returns:
+            Dict с изображениями, сгруппированными по vendor_code
+
+        """
+
+        try:
+            await self._ensure_valid_client()
+        except Exception as e:
+            logger.error(
+                f"Не удалось подключиться к Elasticsearch: {str(e)}"
+            )
+            return {
+                "status": "error",
+                "error": f"Ошибка подключения: {str(e)}",
+                "images": {},
+                "total": 0
+            }
+
+        if not vendor_codes:
+            return {
+                "images": {},
+                "total": 0,
+                "error": "Необходимо указать хотя бы один vendor_code"
+            }
+
+        try:
+            index_name = settings.NPR_IMAGES_INDEX
+            logger.info(
+                f"Поиск изображений: vendor_codes={len(vendor_codes)}, индекс={index_name}"
+            )
+
+            query = {
+                "bool": {
+                    "should": [
+                        {"terms": {"offer_id": vendor_codes}}
+                    ],
+                    "minimum_should_match": 1
+                }
+            }
+
+            # Выполняем поиск в индексе изображений
+            response = await self.client.search(
+                index=index_name,
+                body={
+                    "query": query,
+                    "size": min(size, 10000)
+                }
+            )
+
+            hits = response.get("hits", {})
+            docs = [hit["_source"] for hit in hits.get("hits", [])]
+
+            # Группируем изображения по vendor_code
+            images_by_vendor_code = {}
+
+            for doc in docs:
+                # Пытаемся получить vendor_code из разных полей
+                vendor_code = doc.get("offer_id")
+
+                if not vendor_code:
+                    logger.debug("Пропущено изображение без vendor_code")
+                    continue
+
+                if vendor_code not in images_by_vendor_code:
+                    images_by_vendor_code[vendor_code] = []
+
+                images = doc.get("images")
+                image_info = [image for image in images if image.get("TYPE") == "FORMAT34"]
+                images_by_vendor_code[vendor_code].extend(image_info)
+
+            total = hits.get("total", {}).get("value", 0)
+
+            logger.info(
+                f"Найдены изображения: всего={total}, уникальных_vendor_codes={len(images_by_vendor_code)}"
+            )
+
+            return {
+                "status": "success",
+                "images": images_by_vendor_code,
+                "total": total,
+                "vendor_codes_found": list(images_by_vendor_code.keys()),
+            }
+
+        except Exception as e:
+            logger.error(
+                f"Ошибка при поиске изображений: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "status": "error",
+                "images": {},
+                "total": 0,
+                "error": str(e)
+            }

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # HTTP клиент настройки
     REQUEST_TIMEOUT: int = 30
     MAX_RETRIES: int = 5
+    WB_API_RATE_LIMIT: int = 100  # Запросов в минуту
+    WB_API_RATE_SAFETY_MARGIN: float = 0.9  # 90% от лимита для надёжности
+    WB_API_BURST_CAPACITY: int = 5  # Максимум запросов в burst
 
     # Админский токен кабинета Carville WB
     ADMIN_WB_TOKEN: str = ""

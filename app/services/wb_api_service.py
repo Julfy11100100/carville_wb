@@ -1,11 +1,15 @@
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 from aiohttp import ClientTimeout, TCPConnector
-from aiohttp_retry import RetryClient, ExponentialRetry
 
-from app.exceptions.wb_api import WildberriesRateLimitError, WildberriesAPIError
+from app.constants.wb_api import ResponseStatus
+from app.exceptions.wb_api import WildberriesAPIError
+from app.services.retry_service import RetryService
+from app.services.wb_error_handler import WBErrorHandler
+from app.services.wb_rate_limiter import wb_rate_limiter
 from app.utils.logging import get_logger
 from config import settings
 
@@ -13,9 +17,7 @@ logger = get_logger()
 
 
 class WildberriesAPI:
-    """
-    HTTP-клиент для работы с Wildberries API.
-    """
+    """HTTP-клиент для работы с Wildberries API."""
 
     def __init__(
             self,
@@ -24,68 +26,45 @@ class WildberriesAPI:
             timeout: int = 30,
             max_connections: int = 100,
     ):
-        """
-        Args:
-            base_url: Базовый URL для WB API
-            max_retries: Максимальное количество повторных попыток
-            timeout: Таймаут для HTTP-запросов в секундах
-            max_connections: Максимальное количество одновременных соединений
-        """
         self.base_url = base_url or settings.WB_CONTENT_API_URL
         self.max_retries = max_retries or settings.MAX_RETRIES
-        self.timeout = ClientTimeout(total=timeout)
 
-        # Настройка connection pooling
+        self.timeout = ClientTimeout(
+            total=timeout,
+            connect=10.0,
+            sock_read=timeout,
+            sock_connect=10.0
+        )
+
         self.connector = TCPConnector(
             limit=max_connections,
             limit_per_host=30,
             ttl_dns_cache=300
         )
 
-        # Настройка retry логики
-        self.retry_options = ExponentialRetry(
-            attempts=self.max_retries,
-            start_timeout=1,
-            max_timeout=30,
-            factor=2,
-            statuses={429, 500, 502, 503, 504},
-        )
-
+        self.rate_limiter = wb_rate_limiter
         self._session: Optional[aiohttp.ClientSession] = None
-        self._retry_client: Optional[RetryClient] = None
 
     async def _ensure_session(self):
-        """Создаёт сессию, если она ещё не создана"""
+        """Создаёт сессию, если она ещё не создана."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=self.timeout,
                 connector=self.connector,
                 connector_owner=False
             )
-
-            self._retry_client = RetryClient(
-                client_session=self._session,
-                retry_options=self.retry_options,
-                raise_for_status=False
-            )
-
-            logger.info(
-                f"Сессия WB API создана: base_url={self.base_url}, "
-                f"max_retries={self.max_retries}, соединений={self.connector.limit}"
-            )
+            logger.info(f"WB API сессия создана: base_url={self.base_url}")
 
     async def close(self):
-        """Закрывает все активные соединения"""
-        if self._retry_client:
-            await self._retry_client.close()
+        """Закрывает все активные соединения."""
         if self._session and not self._session.closed:
             await self._session.close()
         if self.connector:
             await self.connector.close()
-        logger.info("Сессия WB API закрыта")
+        logger.info("WB API сессия закрыта")
 
     def _get_headers(self, token: str) -> Dict[str, str]:
-        """Создаёт заголовки для WB API"""
+        """Создаёт заголовки для WB API."""
         return {
             "Authorization": token,
             "Content-Type": "application/json",
@@ -99,22 +78,7 @@ class WildberriesAPI:
             token: str,
             **kwargs
     ) -> Dict[str, Any]:
-        """
-        Выполняет HTTP-запрос с retry-логикой и обработкой ошибок
-
-        Args:
-            method: HTTP метод (GET, POST, etc.)
-            endpoint: API endpoint (например, /content/v2/get/cards/list)
-            token: API токен
-            **kwargs: Дополнительные параметры для запроса
-
-        Returns:
-            Распарсенный JSON ответ
-
-        Raises:
-            WildberriesAPIError: При ошибках API
-            WildberriesRateLimitError: При превышении rate limit
-        """
+        """Выполняет HTTP-запрос с rate limiting и retry-логикой."""
         await self._ensure_session()
 
         url = f"{self.base_url}{endpoint}"
@@ -123,13 +87,18 @@ class WildberriesAPI:
         if 'headers' in kwargs:
             headers.update(kwargs.pop('headers'))
 
-        has_body = "json" in kwargs or "data" in kwargs
-        logger.debug(f"Запрос к WB API: {method} {endpoint}, есть body={has_body}")
+        async def make_single_request():
+            wait_time = await self.rate_limiter.acquire()
 
-        try:
-            async with self._retry_client.request(
+            start_time = time.time()
+            async with self._session.request(
                     method, url, headers=headers, **kwargs
             ) as response:
+                duration_ms = int((time.time() - start_time) * 1000)
+                logger.info(
+                    f"WB API {method} {endpoint} -> {response.status} "
+                    f"in {duration_ms}ms (rate_limit_wait={wait_time:.3f}s)"
+                )
 
                 if response.status >= 400:
                     error_detail = f"Ошибка WB API: {response.status}"
@@ -137,55 +106,82 @@ class WildberriesAPI:
                     try:
                         error_data = await response.json()
                         error_detail = error_data.get('errorText', error_detail)
-                        logger.error(
-                            f"Ошибочный ответ от WB API: статус={response.status}, {endpoint}, ошибка={error_detail}")
                     except Exception:
-                        logger.error(f"Ошибочный ответ от WB API: статус={response.status}, {endpoint}")
+                        pass
 
-                    raise WildberriesAPIError(
+                    error = WildberriesAPIError(
                         error_detail,
                         status_code=response.status,
                         response_data=error_data
                     )
+                    error.status_code = response.status
+                    error.is_client_error = (400 <= response.status < 500)
 
-                # Успешный ответ
+                    if error.is_client_error:
+                        logger.error(
+                            f"WB API {method} {endpoint} returned {response.status}: {error_detail}"
+                        )
+
+                    raise error
+
                 result = await response.json() if response.status == 200 else {}
                 logger.debug(f"Запрос выполнен успешно: {endpoint}, статус={response.status}")
                 return result
 
+        try:
+            result = await RetryService.execute_with_retry(
+                make_single_request,
+                max_retries=self.max_retries,
+                base_delay=1.0,
+                operation_name=f"WB API {method} {endpoint}",
+                retryable_statuses={408, 429, 500, 502, 503, 504}
+            )
+            return result
+
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.error(f"Ошибка сети при запросе к WB API {endpoint}: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка сети при запросе к WB API {endpoint}: {e}",
+                exc_info=True
+            )
             raise WildberriesAPIError(
                 f"Ошибка сети: {e}",
                 response_data={"original_error": str(e)}
             )
-        except WildberriesAPIError:
+        except WildberriesAPIError as e:
+            if hasattr(e, 'is_client_error') and e.is_client_error:
+                raise
+            logger.error(f"WB API ошибка: {e}")
             raise
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при запросе к WB API {endpoint}: {e}", exc_info=True)
+            logger.error(
+                f"Неожиданная ошибка при запросе к WB API {endpoint}: {e}",
+                exc_info=True
+            )
             raise WildberriesAPIError(
                 f"Неожиданная ошибка: {e}",
                 response_data={"original_error": str(e)}
             )
 
-    async def get_product(self, token: str) -> Dict[str, Any]:
-        """Получение одного товара"""
-        body = {
-            "settings": {
-                "cursor": {
-                    "limit": 1,
-                },
-                "filter": {
-                    "withPhoto": -1
-                }
-            }
-        }
+    # ==================== МЕТОДЫ С ERRORHANDLER ====================
 
-        return await self.make_request(
-            "POST",
-            "/content/v2/get/cards/list",
-            token,
-            json=body
+    async def get_product(self, token: str) -> Dict[str, Any]:
+        """Получение одного товара с обработкой ошибок """
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_product",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/content/v2/get/cards/list",
+                token,
+                json={
+                    "settings": {
+                        "cursor": {"limit": 1},
+                        "filter": {"withPhoto": -1}
+                    }
+                }
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("cards")
+            )
         )
 
     async def get_products_page(
@@ -194,33 +190,27 @@ class WildberriesAPI:
             limit: int = 100,
             cursor: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Получение страницы товаров с пагинацией
-
-        Args:
-            token: API токен
-            limit: Количество товаров на странице (макс 100)
-            cursor: Курсор для пагинации
-
-        Returns:
-            Ответ с товарами и новым курсором
-        """
-        body = {
-            "settings": {
-                "cursor": {
-                    "limit": min(limit, 100),
-                    **(cursor or {})
-                },
-                "filter": {
-                    "withPhoto": -1
+        """Получение страницы товаров с пагинацией """
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_products_page",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/content/v2/get/cards/list",
+                token,
+                json={
+                    "settings": {
+                        "cursor": {
+                            "limit": min(limit, 100),
+                            **(cursor or {})
+                        },
+                        "filter": {"withPhoto": -1}
+                    }
                 }
-            }
-        }
-        return await self.make_request(
-            "POST",
-            "/content/v2/get/cards/list",
-            token,
-            json=body
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                cards=r.get("cards"),
+                cursor=r.get("cursor", {})
+            )
         )
 
     async def update_products(
@@ -228,32 +218,27 @@ class WildberriesAPI:
             token: str,
             products: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """
-        Обновление карточек товаров (до 3000 за раз)
-
-        Args:
-            token: API токен
-            products: Список карточек для обновления
-
-        Returns:
-            Ответ от API
-
-        Raises:
-            ValueError: Если передано больше 3000 товаров
-        """
+        """Обновление карточек товаров """
         if len(products) > 3000:
             raise ValueError(
                 f"Невозможно обновить больше 3000 товаров одновременно. "
-                f"Передано: {len(products)}. Используйте update_products_chunked()."
+                f"Передано: {len(products)}."
             )
 
         logger.info(f"Обновление товаров: {len(products)} товаров")
 
-        return await self.make_request(
-            "POST",
-            "/content/v2/cards/update",
-            token,
-            json=products
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB update_products",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/content/v2/cards/update",
+                token,
+                json=products
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data"),
+                errors=r.get("errors", [])
+            )
         )
 
     async def update_products_chunked(
@@ -261,20 +246,9 @@ class WildberriesAPI:
             token: str,
             products: List[Dict[str, Any]],
             chunk_size: int = 3000,
-            delay_between_chunks: float = 6.0
-    ) -> List[Dict[str, Any]]:
-        """
-        Обновление большого количества товаров с автоматическим разбиением на чанки
-
-        Args:
-            token: API токен
-            products: Список всех карточек для обновления
-            chunk_size: Размер одного чанка (макс 3000)
-            delay_between_chunks: Задержка между чанками в секундах (учёт rate limit)
-
-        Returns:
-            Список ответов от API для каждого чанка
-        """
+            delay_between_chunks: float = 1.0
+    ) -> Dict[str, Any]:
+        """Обновление товаров с разбиением на чанки."""
         chunk_size = min(chunk_size, 3000)
         results = []
         total_chunks = (len(products) - 1) // chunk_size + 1
@@ -294,20 +268,50 @@ class WildberriesAPI:
                 result = await self.update_products(token, chunk)
                 results.append(result)
 
-                # Задержка между чанками для соблюдения rate limit
-                if i + chunk_size < len(products):
+                if i + chunk_size < len(products) and delay_between_chunks > 0:
                     await asyncio.sleep(delay_between_chunks)
 
             except WildberriesAPIError as e:
                 logger.error(f"Ошибка при обновлении чанка {chunk_number}/{total_chunks}: {e}")
-                raise
+                return WBErrorHandler.create_error_response(
+                    e,
+                    status_code=getattr(e, 'status_code', None),
+                    response_data=getattr(e, 'response_data', None),
+                    chunk_number=chunk_number,
+                    processed_chunks=len([r for r in results if r.get("status") == ResponseStatus.SUCCESS])
+                )
 
         logger.info(f"Обновление товаров завершено: обработано {len(results)} чанков")
 
-        return results
+        return WBErrorHandler.create_success_response(
+            chunks_processed=len(results),
+            results=results
+        )
 
-    async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> List[Dict[str, Any]]:
-        """Получает все пакеты ошибок для полноценного мониторинга."""
+    async def create_products(
+            self,
+            token: str,
+            cards: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Создание новых карточек товаров """
+        logger.info(f"Создание товаров: {len(cards)} карточек")
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB create_products",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/content/v2/cards/upload",
+                token,
+                json=cards
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data"),
+                errors=r.get("errors", [])
+            )
+        )
+
+    async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> Dict[str, Any]:
+        """Получает все пакеты ошибок для обновления товаров """
         all_error_batches = []
         cursor = {"limit": 100}
         iteration = 0
@@ -320,22 +324,28 @@ class WildberriesAPI:
                 "order": {"ascending": True}
             }
 
-            response = await self.make_request(
-                "POST",
-                "/content/v2/cards/error/list",
-                token,
-                json=body
+            result = await WBErrorHandler.safe_api_call(
+                operation_name=f"WB get_all_errors_for_update (iteration {iteration})",
+                api_call=lambda: self.make_request(
+                    "POST",
+                    "/content/v2/cards/error/list",
+                    token,
+                    json=body
+                )
             )
 
-            data = response.get("data", {})
-            items = data.get("items", [])
+            if result.get("status") == ResponseStatus.ERROR:
+                return result
+
+            data = result.get("data", {}) if "data" in result else result.get("data", {})
+            items = data.get("items", []) if isinstance(data, dict) else []
 
             if not items:
                 break
 
             all_error_batches.extend(items)
 
-            response_cursor = data.get("cursor", {})
+            response_cursor = data.get("cursor", {}) if isinstance(data, dict) else {}
             if not response_cursor.get("next", False):
                 break
 
@@ -346,7 +356,121 @@ class WildberriesAPI:
             }
 
             iteration += 1
-            await asyncio.sleep(6)  # rate limit
+            await asyncio.sleep(0.5)
 
-        logger.info(f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок")
-        return all_error_batches
+        logger.info(
+            f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок "
+            f"за {iteration + 1} итераций"
+        )
+
+        return WBErrorHandler.create_success_response(
+            error_batches=all_error_batches,
+            total_batches=len(all_error_batches),
+            iterations=iteration + 1
+        )
+
+    async def get_all_errors_for_create(
+            self,
+            token: str,
+            max_batches: int = 10000
+    ) -> Dict[str, Any]:
+        """Получает все пакеты ошибок создания товаров"""
+        all_error_batches = []
+        cursor = {"limit": 100}
+        iteration = 0
+
+        logger.info("Начало сбора всех ошибок создания товаров")
+
+        while iteration < max_batches:
+            body = {
+                "cursor": cursor,
+                "order": {"ascending": True}
+            }
+
+            result = await WBErrorHandler.safe_api_call(
+                operation_name=f"WB get_all_errors_for_create (iteration {iteration})",
+                api_call=lambda: self.make_request(
+                    "POST",
+                    "/content/v2/cards/error/list",
+                    token,
+                    json=body
+                )
+            )
+
+            if result.get("status") == ResponseStatus.ERROR:
+                return result
+
+            data = result.get("data", {}) if "data" in result else result.get("data", {})
+            items = data.get("items", []) if isinstance(data, dict) else []
+
+            if not items:
+                logger.debug(f"Итерация {iteration}: нет ошибок")
+                break
+
+            all_error_batches.extend(items)
+
+            logger.debug(
+                f"Итерация {iteration}: получено {len(items)} пакетов, "
+                f"всего={len(all_error_batches)}"
+            )
+
+            response_cursor = data.get("cursor", {}) if isinstance(data, dict) else {}
+            if not response_cursor.get("next", False):
+                logger.debug("Флаг next=false, конец пагинации")
+                break
+
+            cursor = {
+                "limit": 100,
+                "updatedAt": response_cursor.get("updatedAt"),
+                "batchUUID": response_cursor.get("batchUUID")
+            }
+
+            iteration += 1
+            await asyncio.sleep(0.5)
+
+        logger.info(
+            f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок "
+            f"за {iteration + 1} итераций"
+        )
+
+        return WBErrorHandler.create_success_response(
+            error_batches=all_error_batches,
+            total_batches=len(all_error_batches),
+            iterations=iteration + 1
+        )
+
+    async def save_product_images(
+            self,
+            token: str,
+            nm_id: int,
+            upload_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Загружает/обновляет картинки товара через API v3/media/save.
+
+        Args:
+            token: API токен
+            nm_id: Номенклатура ID товара
+            upload_data: {"nmId": 123, "data": ["url1", "url2"]}
+
+        Returns:
+            {status: "success"|"error", data: {...}, errors: [...]}
+        """
+        logger.info(
+            f"Загрузка картинок: nm_id={nm_id}, "
+            f"картинок={len(upload_data.get('data', []))}"
+        )
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name=f"WB save_product_images (nmId={nm_id})",
+            api_call=lambda: self.make_request(
+                "POST",
+                "/content/v3/media/save",
+                token,
+                json=upload_data
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data"),
+                errors=r.get("errors", [])
+            )
+        )

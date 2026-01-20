@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     """Тип задачи"""
     PRODUCTS_INFO = "products_info"
     PRODUCT_UPDATE = "product_update"
+    PRODUCT_CREATE = "product_create"
 
 
 class TaskInfo(BaseModel):

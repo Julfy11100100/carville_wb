@@ -15,78 +15,72 @@ class NprProductService:
         self.elasticsearch_service = elasticsearch_service
 
     INDEX_NAME = settings.NPR_PRODUCTS_INDEX
-    SOURCE_FIELDS = ["norm_code", "cross_codes_string", "oem_string", "ozon_price_clear"]
+    SOURCE_FIELDS = ["norm_code", "cross_codes", "oem", "wb_price_clear", "bar_code"]
 
     async def get_analyze_npr_data(
             self,
-            offer_ids: List[Any],
-            brand: str,
+            vendor_codes: List[Any],
     ) -> Dict[str, Optional[Dict[str, Optional[str]]]]:
         """
         Данные для анализа (без цены).
 
-        Возвращает словарь {оригинальный offer_id: {"oem": ..., "cross_num": ...} | None}.
+        Возвращает словарь {оригинальный vendor_code: {"oem": ..., "cross_num": ...} | None}.
         """
-        prepared = self._prepare_payload(offer_ids, brand)
+        prepared = self._prepare_payload(vendor_codes)
         if prepared is None:
             return {}
 
-        originals_map, norm_map, norm_brand_lower = prepared
-        if not norm_map or not norm_brand_lower:
+        originals_map, norm_map = prepared
+        if not norm_map:
             return originals_map
 
         documents = await self._fetch_documents(
             list(norm_map.keys()),
-            norm_brand_lower,
             exclude_rlz=True,
         )
         return self._merge_documents(originals_map, norm_map, documents, include_price=False)
 
     async def get_create_npr_data(
             self,
-            offer_ids: List[Any],
-            brand: str,
+            vendor_codes: List[Any],
     ) -> Dict[str, Optional[Dict[str, Optional[str]]]]:
         """
         Данные для создания товаров (с ценой).
 
-        Возвращает словарь {оригинальный offer_id: {"oem": ..., "cross_num": ..., "price": ...} | None}.
+        Возвращает словарь {оригинальный vendor_code: {"oem": ..., "cross_num": ..., "price": ...} | None}.
         """
-        prepared = self._prepare_payload(offer_ids, brand)
+        prepared = self._prepare_payload(vendor_codes)
         if prepared is None:
             return {}
 
-        originals_map, norm_map, norm_brand_lower = prepared
-        if not norm_map or not norm_brand_lower:
+        originals_map, norm_map = prepared
+        if not norm_map:
             return originals_map
 
         documents = await self._fetch_documents(
             list(norm_map.keys()),
-            norm_brand_lower,
             exclude_rlz=False,
         )
         return self._merge_documents(originals_map, norm_map, documents, include_price=True)
 
     def _prepare_payload(
             self,
-            offer_ids: Optional[List[Any]],
-            brand: Optional[str] = None,
+            vendor_codes: Optional[List[Any]],
     ) -> Optional[
         tuple[
             Dict[str, Optional[Dict[str, Optional[str]]]],
             Dict[str, List[str]],
-            str,
         ]
     ]:
         """Готовим структуры для ответа и нормализуем входные данные."""
-        if not offer_ids:
+        if not vendor_codes:
             return None
 
         originals_map: Dict[str, Optional[Dict[str, Optional[str]]]] = {}
         norm_map: Dict[str, List[str]] = {}
 
-        for raw_offer in offer_ids:
-            original_value = str(raw_offer)
+        for raw_vendor_code in vendor_codes:
+            original_value = str(raw_vendor_code)
             if original_value not in originals_map:
                 originals_map[original_value] = None
 
@@ -96,14 +90,11 @@ class NprProductService:
 
             norm_map.setdefault(norm_code, []).append(original_value)
 
-        norm_brand_lower = get_normalize_identifier(brand or "").lower()
-
-        return originals_map, norm_map, norm_brand_lower
+        return originals_map, norm_map
 
     async def _fetch_documents(
             self,
             norm_codes: List[str],
-            norm_brand_lower: str,
             *,
             exclude_rlz: bool,
     ) -> Dict[str, Dict[str, Optional[str]]]:
@@ -137,7 +128,6 @@ class NprProductService:
                 "bool": {
                     "must": [
                         {"terms": {"norm_code": norm_codes}},
-                        {"term": {"norm_brand_lower": norm_brand_lower}},
                     ],
                 },
             }
@@ -161,9 +151,10 @@ class NprProductService:
                     continue
                 documents[norm_code] = {
                     "norm_code": norm_code,
-                    "cross_codes_string": source.get("cross_codes_string"),
-                    "oem_string": source.get("oem_string"),
-                    "ozon_price_clear": source.get("ozon_price_clear"),
+                    "cross_codes": source.get("cross_codes"),
+                    "oem": source.get("oem"),
+                    "wb_price_clear": source.get("wb_price_clear"),
+                    "bar_code": source.get("bar_code")
                 }
 
             return documents
@@ -179,21 +170,25 @@ class NprProductService:
             documents: Dict[str, Dict[str, Optional[str]]],
             include_price: bool,
     ) -> Dict[str, Optional[Dict[str, Optional[str]]]]:
-        """Соотнесение найденных документов с оригинальными offer_id."""
+        """Соотнесение найденных документов с оригинальными vendor_codes."""
         for norm_code, originals in norm_map.items():
             document = documents.get(norm_code)
             if not document:
                 continue
 
+            oem = document.get("oem") or []
+            cross_codes = document.get("cross_codes") or []
+
             base_payload = {
-                "oem": document.get("oem_string"),
-                "cross_num": document.get("cross_codes_string"),
+                "oem": [doc.get("OEM_CODE") for doc in oem if doc and doc.get("OEM_CODE")],
+                "cross_num": [doc.get("CROSS_CODE") for doc in cross_codes if doc and doc.get("CROSS_CODE")],
             }
 
             if include_price:
-                base_payload["price"] = document.get("ozon_price_clear")
+                base_payload["price"] = document.get("wb_price_clear")
+                base_payload["bar_code"] = document.get("bar_code")
 
-            for original_offer in originals:
-                originals_map[original_offer] = dict(base_payload)
+            for original_vendor_code in originals:
+                originals_map[original_vendor_code] = base_payload
 
         return originals_map

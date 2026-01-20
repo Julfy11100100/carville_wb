@@ -76,11 +76,17 @@ class ProductAnalyzeService:
         # Шаг 5: получаем кросы и оемы
         # передаем name_recommendations что бы не нагружать процедуру, товары без имени и так не подлежат созданию
         npr_data = await self.npr_product_service.get_analyze_npr_data(
-            [k for k, v in name_recommendations.items() if v is not None], brand
+            [k for k, v in name_recommendations.items() if v is not None]
         )
 
+        # Шаг 6: получаем изображения
+        images_es = await self.elasticsearch_service.get_images_by_vendor_codes(
+            [k for k, v in name_recommendations.items() if v is not None]
+        )
+        images = images_es["images"]
+
         # Шаг 6: Преобразуем товары в необходимый вид
-        products = await self._clean_products(missing_products, name_recommendations, npr_data)
+        products = await self._clean_products(missing_products, name_recommendations, npr_data, images)
 
         # Шаг 7: строим дерево категорий и типов
         tree = await self.sql_category_service.get_parents_category_by_id_categories(
@@ -221,7 +227,8 @@ class ProductAnalyzeService:
         return missing_products
 
     @staticmethod
-    async def _clean_products(missing_products: list[dict], name_recommendations: dict, npr_data: dict) -> list[dict]:
+    async def _clean_products(missing_products: list[dict], name_recommendations: dict, npr_data: dict, images: dict) -> \
+            list[dict]:
         """
         Приводим товары к нужному виду
 
@@ -232,11 +239,12 @@ class ProductAnalyzeService:
         products = []
         without_name_recom = 0
         without_npr_data = 0
+        without_image_data = 0
 
         for product in missing_products:
             vendor_code = product.get("vendorCode")
 
-            if name_recommendations[vendor_code] is None:
+            if name_recommendations.get(vendor_code, None) is None:
                 without_name_recom += 1
                 continue
 
@@ -248,16 +256,22 @@ class ProductAnalyzeService:
                 without_npr_data += 1
                 continue
 
+            if images.get(vendor_code, None) is None:
+                without_image_data += 1
+                logger.info(f"У {vendor_code} отсутствуют картинки")
+                continue
+
             products.append({
                 "vendor_code": product.get("vendorCode"),
                 "type_id": product.get("subjectID"),
-                "oem": [oem] if oem else [],
-                "cross": [cross_num] if cross_num else [],
+                "oem": oem if oem else [],
+                "cross": cross_num if cross_num else [],
                 "name": name_recommendations[vendor_code],
             })
 
         logger.info(f"Товары после очистки {len(products)}")
         logger.info(f"Товары без рекомендаций по названию: {without_name_recom}")
         logger.info(f"Товары без данных NPR: {without_npr_data}")
+        logger.info(f"Товары без изображений: {without_image_data}")
 
         return products

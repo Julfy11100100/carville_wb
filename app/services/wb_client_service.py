@@ -1,16 +1,21 @@
 import asyncio
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Set
 
 from app.constants.brands import BRANDS
 from app.exceptions.wb_api import WildberriesRateLimitError
+from app.schemas.product_create import ProductCreateItem
 from app.schemas.task import TaskStatus, TaskInfo
 from app.services.elasticsearch_service import ElasticsearchService
+from app.services.npr_product_service import NprProductService
+from app.services.recommendation_service import RecommendationService
 from app.services.sql_category_service import SqlCategoryService
 from app.services.task_manager import TaskManager
 from app.services.wb_api_service import WildberriesAPI
 from app.utils.logging import get_logger
 from app.utils.token import hash_token
+from config import settings
 
 logger = get_logger()
 
@@ -26,7 +31,9 @@ class WildberriesClient:
             task_manager: TaskManager,
             elasticsearch_service: ElasticsearchService,
             api_client: WildberriesAPI,
-            sql_category_service: SqlCategoryService
+            sql_category_service: SqlCategoryService,
+            recommendation_service: RecommendationService,
+            npr_product_service: NprProductService,
     ):
         """
         Args:
@@ -37,6 +44,8 @@ class WildberriesClient:
         # Бизнес-сервисы
         self.task_manager = task_manager
         self.elasticsearch_service = elasticsearch_service
+        self.recommendation_service = recommendation_service
+        self.npr_product_service = npr_product_service
 
         # HTTP API клиент
         self.api = api_client
@@ -465,7 +474,9 @@ class WildberriesClient:
             try:
                 logger.debug(f"Проверка результатов {task_info.task_id}: попытка {attempt}/{max_attempts}")
 
-                all_errors = await self.api.get_all_errors_for_update(token)
+                all_errors_result = await self.api.get_all_errors_for_update(token)
+                all_errors = all_errors_result.get("error_batches")
+
                 stats = self._calculate_error_statistics(
                     all_errors,
                     vendor_code_to_nm_id,
@@ -683,3 +694,1022 @@ class WildberriesClient:
 
         logger.info(f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок")
         return all_error_batches
+
+    async def create_products_background(
+            self,
+            token: str,
+            products: List[ProductCreateItem],
+            brand,
+            task_info: TaskInfo
+    ):
+        """
+        Фоновая задача для создания новых карточек товаров в WB.
+
+        Процесс:
+        1. Извлекает товары из Elasticsearch по списку vendor_code
+        2. Трансформирует в формат WB (subjectID, vendorCode, sizes, skus)
+        3. Отправляет пакеты вариантов в WB
+        4. Проверяет результаты создания с поллингом
+        5. Загружает картинки для успешно созданных товаров
+        6. Сохраняет статус выполнения
+
+        Args:
+            token: API токен Wildberries
+            products: Список ProductCreateItem с vendor_code товаров для создания
+            brand: Бренд
+            task_info: Информация о задаче для отслеживания прогресса
+        """
+        try:
+            task_info.status = TaskStatus.RUNNING
+
+            # Извлекаем vendor_codes из ProductCreateItem
+            vendor_codes = [p.vendor_code for p in products]
+            task_info.total_items = len(vendor_codes)
+            task_info.metadata = {
+                "vendor_codes": vendor_codes,
+                "creation_started_at": datetime.now().isoformat(),
+                "creation_completed_at": None,
+                "check_started_at": None,
+                "check_completed_at": None,
+                "batches_sent": 0,
+                "total_products_sent": 0,
+                "elasticsearch_fetch_count": 0,
+                "transformation_errors": 0,
+                "check_results": None,
+                "images_upload_status": None,
+                "images_upload_started_at": None,
+                "images_upload_completed_at": None,
+                "images_upload_stats": None,
+                "images_upload_summary": None,
+                "images_upload_errors": None,
+            }
+            await self.task_manager.save_task(task_info)
+            logger.info(
+                f"[{task_info.task_id}] Начало создания товаров, "
+                f"всего товаров={len(vendor_codes)}"
+            )
+
+            # ШАГ 1: ЗАГРУЗКА ТОВАРОВ ИЗ ELASTICSEARCH
+            logger.info(f"[{task_info.task_id}] Загрузка товаров из Elasticsearch")
+            es_products = await self._get_products_for_vendor_codes(vendor_codes)
+            if not es_products:
+                logger.warning(f"[{task_info.task_id}] Товары не найдены в Elasticsearch")
+                task_info.status = TaskStatus.FAILED
+                task_info.metadata["creation_completed_at"] = datetime.now().isoformat()
+                await self.task_manager.save_task(task_info)
+                return
+
+            task_info.metadata["elasticsearch_fetch_count"] = len(es_products)
+            logger.info(
+                f"[{task_info.task_id}] Загружено из Elasticsearch: "
+                f"запрашивали={len(vendor_codes)}, получили={len(es_products)}"
+            )
+            await self.task_manager.save_task(task_info)
+            # Получаем картинки
+            images = await self._get_images_for_vendor_codes(es_products)
+            # Получаем рекомендации по именам и описанию
+            rec_names = await self.recommendation_service.get_name_recommendations(vendor_codes)
+            rec_descriptions = await self.recommendation_service.get_description_recommendations(vendor_codes)
+            # Получаем кросы и оемы
+            npr_data = await self.npr_product_service.get_create_npr_data(vendor_codes)
+
+            # Подготавливаем данные
+            failed_clean_product = {}  # сбор ошибок данных
+            prepare_products = []  # подготовленные продукты
+            for vendor_code in vendor_codes:
+                try:
+                    clean_product = self._clean_product_document(
+                        vendor_code, es_products[vendor_code],
+                        rec_names[vendor_code], rec_descriptions[vendor_code],
+                        npr_data.get(vendor_code, {}), images[vendor_code]
+                    )
+                    prepare_products.append(clean_product)
+                except Exception as err:
+                    msg = f"Товар {vendor_code} имеет неполные данные: {err}"
+
+                    failed_clean_product[vendor_code] = msg
+
+            # логируем товары по которым не удалось подготовить данные для отправки
+            if failed_clean_product:
+                msg = (
+                    f"Товары, для которых было недостаточно данных {len(failed_clean_product)}: "
+                    f"{failed_clean_product}"
+                )
+                logger.warning(msg)
+                task_info.metadata["transformation_errors"] = len(failed_clean_product)
+
+            if not prepare_products:
+                task_info.status = TaskStatus.FAILED
+                task_info.error = "Нет корректных карточек на отправку"
+                await self.task_manager.save_task(task_info)
+                return
+
+            # ШАГ 2: Подготовка карточек в формате WB
+            logger.info(f"[{task_info.task_id}] Группировка товаров по subjectID")
+
+            # Группируем по subjectID
+            wb_cards = self.group_by_subject_id(prepare_products)
+
+            logger.info(
+                f"[{task_info.task_id}] Сгруппировано: "
+                f"{len(prepare_products)} товаров → {len(wb_cards)} карточек"
+            )
+
+            # Разбиваем на батчи с учётом лимита вариантов
+            wb_batches = self.split_cards_by_variants(wb_cards, max_variants=100)
+
+            logger.info(
+                f"[{task_info.task_id}] Создано {len(wb_batches)} батчей для отправки"
+            )
+
+            # ШАГ 3: Отправка на WB
+            wb_batches_sent = 0
+            total_products_sent = 0
+
+            logger.info(f"[{task_info.task_id}] Начало отправки в WB")
+
+            for batch_number, batch in enumerate(wb_batches, start=1):
+                # Считаем количество товаров в батче
+                batch_variants_count = sum(len(card["variants"]) for card in batch)
+
+                logger.debug(
+                    f"[{task_info.task_id}] Пакет {batch_number}/{len(wb_batches)}: "
+                    f"карточек={len(batch)}, товаров={batch_variants_count}"
+                )
+
+                # Отправляем пакет в WB
+                create_result = await self.api.create_products(
+                    token=token,
+                    cards=batch
+                )
+
+                # Проверяем статус
+                if create_result["status"] == "error":
+                    logger.error(
+                        f"[{task_info.task_id}] Пакет {batch_number} ОШИБКА: "
+                        f"{create_result['error']} (статус: {create_result.get('status_code')})"
+                    )
+                    task_info.status = TaskStatus.FAILED
+                    task_info.error = create_result["error"]
+                    await self.task_manager.save_task(task_info)
+                    return
+
+                wb_batches_sent += 1
+                total_products_sent += batch_variants_count
+                task_info.processed_items = total_products_sent
+
+                logger.info(
+                    f"[{task_info.task_id}] Пакет {batch_number}/{len(wb_batches)}: "
+                    f"отправлено успешно, карточек={len(batch)}, товаров={batch_variants_count}"
+                )
+
+                # Сохраняем прогресс
+                task_info.metadata["batches_sent"] = wb_batches_sent
+                task_info.metadata["total_products_sent"] = total_products_sent
+                task_info.metadata["cards_sent"] = sum(
+                    len(b) for b in wb_batches[:batch_number]
+                )
+                await self.task_manager.save_task(task_info)
+
+                # Задержка между пакетами
+                if batch_number < len(wb_batches):
+                    logger.debug(f"[{task_info.task_id}] Пакет {batch_number}: ждём 6 сек")
+                    await asyncio.sleep(6)
+
+            logger.info(
+                f"[{task_info.task_id}] Все пакеты отправлены: "
+                f"батчей={wb_batches_sent}, карточек={len(wb_cards)}, товаров={total_products_sent}"
+            )
+
+            # ШАГ 3: ПРОВЕРКА РЕЗУЛЬТАТОВ СОЗДАНИЯ С ПОЛЛИНГОМ
+
+            task_info.metadata["check_started_at"] = datetime.now().isoformat()
+            await self.task_manager.save_task(task_info)
+
+            logger.info(f"[{task_info.task_id}] Начало проверки результатов создания")
+
+            check_result = await self._check_create_results_with_polling(
+                token=token,
+                task_info=task_info,
+                vendor_codes=vendor_codes,
+                max_attempts=5,
+                initial_delay=10,
+                retry_delay=15
+            )
+
+            task_info.metadata["check_results"] = check_result
+            task_info.metadata["check_completed_at"] = datetime.now().isoformat()
+
+            # ШАГ 4: ОПРЕДЕЛЯЕМ УСПЕШНЫЕ ТОВАРЫ И ЗАГРУЖАЕМ КАРТИНКИ
+
+            if check_result.get("checked"):
+                error_count = check_result.get("error_count", 0)
+                success_count = check_result.get("success_count", 0)
+
+                logger.info(
+                    f"[{task_info.task_id}] Проверка завершена: "
+                    f"успешно={success_count}, ошибок={error_count}, "
+                    f"попыток={check_result.get('polling_attempts', 0)}"
+                )
+
+                # Определяем успешные товары (БЕЗ ошибок)
+                error_vendor_codes = set(check_result.get("error_vendor_codes", []))
+                successful_vendor_codes = [
+                    vc for vc in vendor_codes
+                    if vc not in error_vendor_codes
+                ]
+
+                logger.info(
+                    f"[{task_info.task_id}] Успешно созданы товары: "
+                    f"количество={len(successful_vendor_codes)}"
+                )
+
+                # Если есть успешные товары - загружаем картинки
+                if successful_vendor_codes:
+                    await self._upload_images_for_successful_products(
+                        token=token,
+                        task_id=task_info.task_id,
+                        successful_vendor_codes=successful_vendor_codes,
+                        images=images,
+                        task_info=task_info
+                    )
+
+                # ШАГ 5: ФИНАЛЬНЫЙ СТАТУС
+                if error_count > 0:
+                    task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
+                    logger.warning(
+                        f"[{task_info.task_id}] Создание завершено с ошибками: "
+                        f"пакетов={wb_batches_sent}, товаров={total_products_sent}, "
+                        f"ошибок={error_count}"
+                    )
+                else:
+                    task_info.status = TaskStatus.COMPLETED
+                    logger.info(
+                        f"[{task_info.task_id}] Создание завершено успешно: "
+                        f"пакетов={wb_batches_sent}, товаров={total_products_sent}"
+                    )
+            else:
+                task_info.status = TaskStatus.COMPLETED_WITH_ERRORS
+                logger.warning(
+                    f"[{task_info.task_id}] Проверка не завершена: "
+                    f"причина={check_result.get('reason')}"
+                )
+
+            task_info.metadata["creation_completed_at"] = datetime.now().isoformat()
+
+        except Exception as e:
+            task_info.status = TaskStatus.FAILED
+            task_info.completed_at = datetime.now()
+            task_info.error = str(e)
+
+            logger.error(
+                f"[{task_info.task_id}] ОШИБКА при создании товаров: {e}",
+                exc_info=True
+            )
+
+        finally:
+            task_info.completed_at = datetime.now()
+            await self.task_manager.save_task(task_info)
+
+    async def _get_products_for_vendor_codes(self, vendor_codes: List[str]) -> dict[str, dict]:
+        """
+        Получить товары для списка vendor_codes из Elasticsearch
+
+        Args:
+            vendor_codes: Список vendor_codes для получения товаров
+        """
+
+        response = await self.elasticsearch_service.search_products(
+            hash_token(settings.ADMIN_WB_TOKEN),
+            filters={"vendorCode": vendor_codes},
+            limit=1000,
+            offset=0
+        )
+        # Обработка ответа от search_products
+        products = (
+            response.get("products", [])
+            if isinstance(response, dict)
+            else response
+        )
+        logger.info(f"Получено {len(products)} товаров из Elasticsearch")
+
+        # Формируем словарь: vendor_code -> тело документа
+        products_dict = {}
+        found_vendor_codes = set()
+
+        for product_doc in products:
+            vendor_code = product_doc.get("vendorCode")
+            found_vendor_codes.add(vendor_code)
+            products_dict[vendor_code] = product_doc
+            found_vendor_codes.add(vendor_code)
+
+        # Определяем vendor_codes, для которых не нашлись товары
+        not_found_vendor_codes = list(set(vendor_codes) - found_vendor_codes)
+        found_count = len(found_vendor_codes)
+        not_found_count = len(not_found_vendor_codes)
+        logger.info(
+            f"Найдены товары для {found_count} vendor_codes, не найдены для {not_found_count} vendor_codes"
+        )
+
+        # Выводим первые 10 vendor_codes без товаров
+        if not_found_vendor_codes:
+            sample_size = min(10, len(not_found_vendor_codes))
+            sample_not_found = not_found_vendor_codes[:sample_size]
+            logger.info(f"Первые {sample_size} offer_ids без товаров: {sample_not_found}")
+
+        # подставляем пустое тело, что бы упасть далее
+        for vendor_code in not_found_vendor_codes:
+            products_dict[vendor_code] = {}
+
+        return products_dict
+
+    @staticmethod
+    def group_by_subject_id(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Группирует товары по subjectID в формат WB API
+
+        Args:
+            products: Список подготовленных товаров
+
+        Returns:
+            Список карточек в формате WB [{subjectID, variants: [...]}]
+        """
+        # Группируем по subjectID
+        grouped = defaultdict(list)
+
+        for product in products:
+            subject_id = product.get("subjectID")
+            if not subject_id:
+                continue
+
+            # Создаём variant (убираем subjectID из товара)
+            variant = {k: v for k, v in product.items() if k != "subjectID"}
+            grouped[subject_id].append(variant)
+
+        # Формируем карточки в формате WB
+        cards = []
+        for subject_id, variants in grouped.items():
+            cards.append({
+                "subjectID": subject_id,
+                "variants": variants
+            })
+
+        return cards
+
+    @staticmethod
+    def split_cards_by_variants(cards: List[Dict], max_variants: int = 100) -> List[List[Dict]]:
+        """
+        Разбивает карточки на батчи с учётом лимита вариантов
+
+        Args:
+            cards: Список карточек [{subjectID, variants: [...]}]
+            max_variants: Максимум вариантов в одном батче
+
+        Returns:
+            Список батчей карточек
+        """
+        batches = []
+        current_batch = []
+        current_variants_count = 0
+
+        for card in cards:
+            variants_count = len(card["variants"])
+
+            # Если одна карточка содержит больше max_variants
+            if variants_count > max_variants:
+                # Разбиваем её на несколько карточек
+                for i in range(0, variants_count, max_variants):
+                    chunk_variants = card["variants"][i:i + max_variants]
+
+                    # Сохраняем предыдущий батч если есть
+                    if current_batch:
+                        batches.append(current_batch)
+                        current_batch = []
+                        current_variants_count = 0
+
+                    # Добавляем как отдельный батч
+                    batches.append([{
+                        "subjectID": card["subjectID"],
+                        "variants": chunk_variants
+                    }])
+
+            # Если добавление карточки превысит лимит
+            elif current_variants_count + variants_count > max_variants:
+                # Сохраняем текущий батч
+                batches.append(current_batch)
+                # Начинаем новый батч с этой карточки
+                current_batch = [card]
+                current_variants_count = variants_count
+
+            # Добавляем в текущий батч
+            else:
+                current_batch.append(card)
+                current_variants_count += variants_count
+
+        # Добавляем последний батч
+        if current_batch:
+            batches.append(current_batch)
+
+        return batches
+
+    async def _check_create_results_with_polling(
+            self,
+            token: str,
+            task_info: TaskInfo,
+            vendor_codes: List[str],
+            max_attempts: int = 5,
+            initial_delay: int = 10,
+            retry_delay: int = 15,
+            timeout_minutes: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Проверяет результаты создания товаров с поллингом.
+
+        Вызывает /content/v2/cards/error/list несколько раз,
+        чтобы гарантировать все ошибки загрузились.
+
+        Args:
+            token: API токен
+            task_info: Информация о задаче
+            vendor_codes: Список vendor_codes
+            max_attempts: Максимальное количество попыток
+            initial_delay: Первая задержка (сек)
+            retry_delay: Задержка между попытками (сек)
+            timeout_minutes: Максимальное время ожидания (мин)
+
+        Returns:
+            Результаты с информацией об ошибках создания
+        """
+
+        total_products = task_info.total_items or 0
+
+        if not vendor_codes:
+            return {
+                "checked": False,
+                "reason": "Нет vendorCode в маппинге",
+                "polling_attempts": 0
+            }
+
+        previous_error_count = -1
+        stable_count = 0
+        attempt = 0
+        timeout_deadline = datetime.now() + timedelta(minutes=timeout_minutes)
+
+        await asyncio.sleep(initial_delay)
+
+        logger.info(
+            f"[{task_info.task_id}] Начало поллинга результатов создания: "
+            f"макс_попыток={max_attempts}, отслеживаем {len(vendor_codes)} vendorCode'ов"
+        )
+
+        while attempt < max_attempts:
+            if datetime.now() > timeout_deadline:
+                logger.warning(
+                    f"[{task_info.task_id}] Таймаут поллинга ({timeout_minutes} мин)"
+                )
+                break
+
+            attempt += 1
+
+            try:
+                logger.debug(
+                    f"[{task_info.task_id}] Проверка результатов: "
+                    f"попытка {attempt}/{max_attempts}"
+                )
+
+                # Получаем все ошибки создания
+                all_errors_result = await self.api.get_all_errors_for_create(token)
+
+                # Проверяем статус API
+                if all_errors_result["status"] == "error":
+                    logger.error(
+                        f"[{task_info.task_id}] Ошибка получения ошибок: "
+                        f"{all_errors_result['error']}"
+                    )
+                    # Продолжаем попытки, это может быть временная ошибка
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                all_errors = all_errors_result.get("error_batches", [])
+
+                stats = self._calculate_create_error_statistics(
+                    all_errors,
+                    vendor_codes,
+                    total_products
+                )
+
+                current_error_count = stats["error_count"]
+
+                logger.info(
+                    f"[{task_info.task_id}] Результаты проверки: "
+                    f"попытка={attempt}, ошибок={current_error_count}, "
+                    f"успешно={stats['success_count']}"
+                )
+
+                if current_error_count == previous_error_count:
+                    stable_count += 1
+
+                    if stable_count >= 2:
+                        logger.info(
+                            f"[{task_info.task_id}] Результаты стабильны: "
+                            f"попытка={attempt}, ошибок={current_error_count}"
+                        )
+
+                        return {
+                            "checked": True,
+                            "success_count": stats["success_count"],
+                            "error_count": current_error_count,
+                            "success_rate": stats["success_rate"],
+                            "error_vendor_codes": list(stats["error_vendor_codes"]),
+                            "error_details": stats["error_details"],
+                            "error_batches_count": len(stats["error_batches"]),
+                            "polling_attempts": attempt,
+                            "stable": True
+                        }
+                else:
+                    stable_count = 0
+                    previous_error_count = current_error_count
+
+                if attempt == max_attempts:
+                    logger.warning(
+                        f"[{task_info.task_id}] Исчерпаны все попытки: "
+                        f"ошибок={current_error_count}"
+                    )
+
+                    return {
+                        "checked": True,
+                        "success_count": stats["success_count"],
+                        "error_count": current_error_count,
+                        "success_rate": stats["success_rate"],
+                        "error_vendor_codes": list(stats["error_vendor_codes"]),
+                        "error_details": stats["error_details"],
+                        "error_batches_count": len(stats["error_batches"]),
+                        "polling_attempts": attempt,
+                        "stable": False,
+                        "warning": "Результаты могут быть неполными (достигнут лимит попыток)"
+                    }
+
+                await asyncio.sleep(retry_delay)
+
+            except Exception as e:
+                logger.error(
+                    f"[{task_info.task_id}] Ошибка при проверке (попытка {attempt}): {e}",
+                    exc_info=True
+                )
+
+                if attempt == max_attempts:
+                    return {
+                        "checked": False,
+                        "reason": f"Ошибка после {attempt} попыток: {e}",
+                        "polling_attempts": attempt
+                    }
+
+                await asyncio.sleep(retry_delay)
+
+        return {
+            "checked": False,
+            "reason": "Цикл поллинга исчерпан",
+            "polling_attempts": attempt
+        }
+
+    @staticmethod
+    def _filter_relevant_create_errors(
+            all_errors: List[Dict[str, Any]],
+            vendor_codes: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Фильтрует пакеты ошибок создания по vendor_code.
+        Ищет vendorCodes в ошибках WB API.
+        """
+
+        relevant = []
+        vendor_codes_set = set(vendor_codes)
+        for batch in all_errors:
+            batch_vendor_codes = batch.get("vendorCodes", [])
+
+            if not batch_vendor_codes:
+                batch_vendor_codes = list(batch.get("errors", {}).keys())
+
+            if not batch_vendor_codes:
+                batch_vendor_codes = list(batch.get("subjects", {}).keys())
+
+            batch_vendor_codes_set = set(batch_vendor_codes)
+
+            # Пересечение - есть ли наши vendor_codes в этом пакете?
+            if batch_vendor_codes_set & vendor_codes_set:
+                relevant.append(batch)
+
+        return relevant
+
+    def _calculate_create_error_statistics(
+            self,
+            all_errors: List[Dict[str, Any]],
+            vendor_codes: List[str],
+            total_products: int
+    ) -> Dict[str, Any]:
+        """
+        Подсчитывает статистику ошибок создания товаров по vendor_code.
+        """
+        relevant_errors = self._filter_relevant_create_errors(all_errors, vendor_codes)
+
+        error_vendor_codes = set()
+        error_details_by_vendor_codes = {}
+
+        for batch in relevant_errors:
+            batch_errors = batch.get("errors", {})
+            batch_subjects = batch.get("subjects", {})
+
+            for vendor_code, errors in batch_errors.items():
+                if vendor_code not in vendor_codes:
+                    logger.debug(
+                        f"Пропущен vendor_code={vendor_code} (не в списке отправленных)"
+                    )
+                    continue
+
+                error_vendor_codes.add(vendor_code)
+
+                subject_info = batch_subjects.get(vendor_code, {})
+
+                logger.warning(
+                    f"Ошибка создания: vendor_code={vendor_code}, ошибки={errors}"
+                )
+
+                error_details_by_vendor_codes[vendor_code] = {
+                    "subject_name": subject_info.get("name"),
+                    "errors": errors
+                }
+
+        error_count = len(error_vendor_codes)
+        success_count = total_products - error_count
+        success_rate = success_count / total_products if total_products > 0 else 0
+
+        logger.info(
+            f"Статистика ошибок создания: всего={total_products}, "
+            f"успешно={success_count}, ошибок={error_count}, "
+            f"уникальных vendor_codes с ошибками={len(error_vendor_codes)}"
+        )
+
+        return {
+            "success_count": success_count,
+            "error_count": error_count,
+            "success_rate": success_rate,
+            "error_vendor_codes": error_vendor_codes,
+            "error_details": error_details_by_vendor_codes,
+            "error_batches": relevant_errors
+        }
+
+    @staticmethod
+    def _clean_product_document(
+            vendor_code: str,
+            es_product: Dict[str, Any],
+            recommendation_name: str,
+            recommendation_description: str,
+            npr_data: dict,
+            image: dict
+
+    ) -> Dict[str, Any]:
+        """
+        Трансформирует товары в формат WB для создания карточек.
+
+        Args:
+            vendor_code: VendorCode
+            es_product: Карточка из Elasticsearch
+            recommendation_name: Рекомендация по имени
+            recommendation_description: Рекомендация по описанию
+            npr_data: Данные из нпр
+            image: инфо по картинке
+
+        Returns:
+            Очищенный подготовленный документ, warnings
+        """
+        if (npr_data is None or not isinstance(npr_data, dict)
+                or npr_data.get("price", None) is None
+                or npr_data.get("bar_code", None) is None
+        ):
+            raise AttributeError(f"У товара {vendor_code} отсутствуют данные NPR.")
+        if not image:
+            raise AttributeError(f"У товара {vendor_code} отсутствуют изображения.")
+        if not es_product:
+            raise AttributeError(f"У товара {vendor_code} нет данных в базе данных.")
+        if not recommendation_name:
+            raise AttributeError(f"У товара {vendor_code} нет рекомендуемого названия.")
+        if not recommendation_description:
+            raise AttributeError(f"Для товара {vendor_code} отсутствует описание рекомендаций.")
+
+        # заполняем верхне-уровневые поля
+        # если нет какого то главного поля нет и смысла отправлять товар на создание
+        try:
+            clean_product = {  # noqa
+                "subjectID": es_product.get("subjectID"),
+                "subjectName": es_product.get("subjectName"),
+                "brand": es_product.get("brand"),
+                "vendorCode": vendor_code,
+                "title": recommendation_name,
+                "description": recommendation_description
+            }
+
+        except KeyError as err:
+            msg = f"У товара {vendor_code} отсутствует поле первого уровня: {err}"
+            logger.warning(msg)
+            raise AttributeError(msg)
+
+        # Заполняем dimensions
+        if "dimensions" in es_product.keys():
+            clean_product["dimensions"] = es_product.get("dimensions")
+
+        # вытаскиваем характеристики из нашего товара
+        characteristics: list[dict] = es_product.get("characteristics")
+        if characteristics:
+            # Удаляем ОЕМ характеристику 4572490 и характеристику артикула 5522881
+            delete_characteristics = (4572490, 5522881)
+            clean_product["characteristics"] = [char for char in characteristics if
+                                                char.get("id") not in delete_characteristics]
+        else:
+            clean_product["characteristics"] = []
+
+        # Заполняем характеристику артикула 5522881
+        clean_product["characteristics"].append({
+            "id": 5522881,
+            "name": "Артикул производителя",
+            "value": [
+                vendor_code,
+                vendor_code.replace(" ", "")
+            ]
+        })
+
+        # Заполняем данные из НПР если есть
+        vendor_data = npr_data.get(vendor_code, {})
+        oem_list = vendor_data.get("oem", None)
+        if oem_list:
+            clean_product["characteristics"].append({
+                "id": 4572490,
+                "name": "ОЕМ номер",
+                "value": oem_list
+            })
+
+        # Добавляем поле 'sizes'
+        bar_code = vendor_data.get("bar_code")
+        if bar_code:
+            clean_product["sizes"] = [
+                {
+                    "chrtID": 70457854,
+                    "techSize": "0",
+                    "wbSize": "",
+                    "skus": [
+                        bar_code
+                    ]
+                }
+            ],
+
+        return clean_product
+
+    async def _get_images_for_vendor_codes(
+            self,
+            products: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Получить изображения для списка vendor_codes из Elasticsearch.
+        Затем составить массив изображений, если есть.
+
+        Args:
+            products: Список карточек из Elasticsearch
+
+        Returns:
+            {'vendor_code': {"nm_id", "links"}}
+        """
+        # Для сопоставления vendor_code → nm_id
+        vendor_codes_to_nm_id = {
+            vendor_code: product.get("nmID")
+            for vendor_code, product in products.items()
+        }
+        vendor_codes = [str(key) for key in vendor_codes_to_nm_id.keys()]
+        logger.info(f"Получение изображений для {len(vendor_codes)} vendor_codes")
+
+        # Получаем изображения из Elasticsearch
+        result = await self.elasticsearch_service.get_images_by_vendor_codes(
+            vendor_codes=vendor_codes
+        )
+
+        if result.get("status") != "success":
+            error = result.get("error", "Unknown error")
+            msg = f"Ошибка получения изображений: {error}"
+            logger.error(msg)
+            raise AttributeError(msg)
+
+        images = result.get("images", {})
+        logger.info(f"Получено {len(images)} изображений из Elasticsearch")
+
+        # Преобразуем: vendor_code → список ссылок (LINK) для TYPE == 'FORMAT34'
+        images_dict = {}
+        found_vendor_codes = set()
+
+        for vendor_code, images_list in images.items():
+            nm_id = vendor_codes_to_nm_id.get(vendor_code)
+
+            if not nm_id:
+                logger.debug(f"Пропущен vendor_code={vendor_code}: нет nm_id")
+                continue
+
+            # Собираем ссылки
+            format34_links = [
+                img.get("LINK")
+                for img in images_list
+                if img.get("LINK")
+            ]
+
+            if format34_links:
+                images_dict[vendor_code] = {"nm_id": nm_id, "links": format34_links}
+                found_vendor_codes.add(vendor_code)
+
+        # Статистика
+        not_found_vendor_codes = list(set(vendor_codes) - found_vendor_codes)
+        found_count = len(found_vendor_codes)
+        not_found_count = len(not_found_vendor_codes)
+
+        logger.info(
+            f"Статистика: найдено изображений для {found_count} vendor_codes, "
+            f"не найдено для {not_found_count} vendor_codes"
+        )
+
+        if not_found_vendor_codes:
+            sample_size = min(10, len(not_found_vendor_codes))
+            sample_not_found = not_found_vendor_codes[:sample_size]
+            logger.info(
+                f"Первые {sample_size} vendor_codes без изображений: {sample_not_found}"
+            )
+
+        # подставляем пустое тело, что бы упасть далее
+        for vendor_code in not_found_vendor_codes:
+            images_dict[vendor_code] = {}
+
+        return images_dict
+
+    async def _upload_images_for_successful_products(
+            self,
+            token: str,
+            task_id: str,
+            successful_vendor_codes: List[str],
+            images: Dict[str, Dict[str, Any]],
+            task_info: TaskInfo
+    ) -> None:
+        """
+        Загружает картинки для успешно созданных товаров.
+        """
+        try:
+            logger.info(
+                f"[{task_id}] Начало загрузки картинок: "
+                f"товаров={len(successful_vendor_codes)}"
+            )
+
+            # ШАГ 1: Проверяем необходимые картинки
+            images_by_nm_id = {
+                i.get("nm_id"): i.get("links")
+                for vendor_code, i in images.items()
+                if vendor_code in successful_vendor_codes
+            }
+
+            total_images = sum(len(imgs) for imgs in images_by_nm_id.values())
+            logger.info(
+                f"[{task_id}] Получены картинки: "
+                f"всего={total_images}, товаров={len(images_by_nm_id)}"
+            )
+
+            # ШАГ 2: Подготавливаем данные для API
+            logger.debug(f"[{task_id}] Преобразование в формат API v3")
+
+            images_upload_summary = {}
+            upload_data_list = []
+
+            for nm_id, links in images_by_nm_id.items():
+                if not links:
+                    logger.debug(f"[{task_id}] Пропуск: нет изображений для nm_id={nm_id}")
+                    continue
+
+                upload_data = {
+                    "nmId": nm_id,
+                    "data": links
+                }
+
+                logger.debug(
+                    f"[{task_id}] Подготовка к загрузке: "
+                    f"nm_id={nm_id}, картинок={len(links)}"
+                )
+
+                upload_data_list.append(upload_data)
+                images_upload_summary[str(nm_id)] = {
+                    "images_count": len(links),
+                    "status": "PENDING"
+                }
+
+            if not upload_data_list:
+                logger.warning(
+                    f"[{task_id}] Не удалось подготовить задачи загрузки"
+                )
+                task_info.metadata["images_upload_status"] = "PREPARATION_FAILED"
+                await self.task_manager.save_task(task_info)
+                return
+
+            # ШАГ 3: Выполняем загрузку последовательно с задержками
+            logger.info(
+                f"[{task_id}] Начало загрузки картинок (последовательно): "
+                f"товаров={len(upload_data_list)}"
+            )
+
+            task_info.metadata["images_upload_started_at"] = datetime.now().isoformat()
+            task_info.metadata["images_upload_summary"] = images_upload_summary
+
+            successful_uploads = 0
+            failed_uploads = 0
+            upload_errors = {}
+
+            for idx, upload_data in enumerate(upload_data_list, start=1):
+                nm_id = upload_data["nmId"]
+                str_nm_id = str(nm_id)
+
+                logger.debug(
+                    f"[{task_id}] Загрузка {idx}/{len(upload_data_list)}: "
+                    f"nm_id={nm_id}, картинок={len(upload_data['data'])}"
+                )
+
+                try:
+                    # Загружаем изображения
+                    result = await self.api.save_product_images(
+                        token=token,
+                        nm_id=nm_id,
+                        upload_data=upload_data
+                    )
+
+                    # Проверяем результат
+                    if isinstance(result, dict) and result.get("status") == "success":
+                        successful_uploads += 1
+                        images_upload_summary[str_nm_id]["status"] = "SUCCESS"
+                        logger.info(
+                            f"[{task_id}] Загрузка {idx}/{len(upload_data_list)} успешна: "
+                            f"nm_id={nm_id}, картинок={len(upload_data['data'])}"
+                        )
+                    else:
+                        # Ошибка API
+                        failed_uploads += 1
+                        error = result.get("error", "Unknown error") if isinstance(result, dict) else str(result)
+                        images_upload_summary[str_nm_id]["status"] = "FAILED"
+                        images_upload_summary[str_nm_id]["error"] = error
+                        upload_errors[str_nm_id] = error
+                        logger.warning(
+                            f"[{task_id}] Загрузка {idx}/{len(upload_data_list)} не удалась: "
+                            f"nm_id={nm_id}, ошибка={error}"
+                        )
+
+                except Exception as e:
+                    # Исключение при загрузке
+                    failed_uploads += 1
+                    error_msg = str(e)
+                    images_upload_summary[str_nm_id]["status"] = "EXCEPTION"
+                    images_upload_summary[str_nm_id]["error"] = error_msg
+                    upload_errors[str_nm_id] = error_msg
+                    logger.error(
+                        f"[{task_id}] Загрузка {idx}/{len(upload_data_list)} исключение: "
+                        f"nm_id={nm_id}, ошибка={error_msg}",
+                        exc_info=True
+                    )
+                await asyncio.sleep(0.7)
+
+                # Сохраняем прогресс каждые 10 товаров
+                if idx % 10 == 0:
+                    task_info.metadata["images_upload_summary"] = images_upload_summary
+                    task_info.metadata["images_upload_progress"] = {
+                        "current": idx,
+                        "total": len(upload_data_list),
+                        "successful": successful_uploads,
+                        "failed": failed_uploads
+                    }
+                    await self.task_manager.save_task(task_info)
+
+            # ШАГ 4: Сохраняем финальные результаты
+            task_info.metadata["images_upload_status"] = "COMPLETED"
+            task_info.metadata["images_upload_completed_at"] = datetime.now().isoformat()
+            task_info.metadata["images_upload_summary"] = images_upload_summary
+            task_info.metadata["images_upload_stats"] = {
+                "successful": successful_uploads,
+                "failed": failed_uploads,
+                "total": len(upload_data_list)
+            }
+
+            if upload_errors:
+                task_info.metadata["images_upload_errors"] = upload_errors
+
+            logger.info(
+                f"[{task_id}] Загрузка картинок завершена: "
+                f"успешно={successful_uploads}, ошибок={failed_uploads}, "
+                f"всего={len(upload_data_list)}"
+            )
+
+            await self.task_manager.save_task(task_info)
+
+        except Exception as e:
+            logger.error(
+                f"[{task_id}] Критическая ошибка при загрузке картинок: {str(e)}",
+                exc_info=True
+            )
+            task_info.metadata["images_upload_status"] = "ERROR"
+            task_info.metadata["images_upload_error"] = str(e)
+            await self.task_manager.save_task(task_info)

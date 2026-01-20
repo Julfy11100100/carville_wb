@@ -7,6 +7,7 @@ from app.containers import Container
 from app.exceptions.task import TaskDatabaseError
 from app.exceptions.wb_api import WildberriesAPIError
 from app.schemas.product_analyze import ProductAnalyzeResponse, ProductAnalyzeRequest
+from app.schemas.product_create import ProductCreateRequest
 from app.schemas.product_match import ProductMatchRequest, ProductListMatchResponse, ProductMatchResponse
 from app.schemas.product_update import ProductUpdateRequest
 from app.schemas.task import TaskStatusRequest, TaskType, TaskCreateResponse, TaskInfoResponse
@@ -175,7 +176,7 @@ async def create_products_collection_task(
     tags=["products"],
     summary="Создать задачу обновления товаров",
     description="Создаёт асинхронную задачу для обновления товаров. Поддерживает массовое обновление по nm_id. "
-                "Если активная задача уже существует для этого токена, возвращается информация о ней.",
+                "Возвращается информация о задаче.",
     response_model=TaskCreateResponse
 )
 @inject
@@ -455,6 +456,99 @@ async def analyze_products(
         raise
     except Exception as e:
         logger.error(f"Неожиданная ошибка при анализе продуктов: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Внутренняя ошибка сервера"
+        )
+
+
+@router.post(
+    "/product/create",
+    tags=["products"],
+    summary="Создать задачу создания товаров",
+    description="Создаёт асинхронную задачу для создания товаров."
+                "Возвращается информация о задаче.",
+    response_model=TaskCreateResponse
+)
+@inject
+async def create_products_create_task(
+        request: ProductCreateRequest,
+        background_tasks: BackgroundTasks,
+        token: str = Depends(get_wb_token),
+        task_manager: TaskManager = Depends(Provide[Container.task_manager]),
+        wb_client: WildberriesClient = Depends(Provide[Container.wildberries_client])
+):
+    """
+    **Параметры запроса:**
+
+    - `brand`: Брэнд товаров (опционально)
+    - `products`: Список товаров с nm_id и новыми значениями (обязательно, не может быть пустым)
+    """
+    try:
+        hash_wb_token = hash_token(token)
+        # Проверяем, не идет ли индексация
+        if await task_manager.is_client_indexing(token):
+            logger.warning(f"Идет индексирование для клиента {hash_wb_token} или администратора")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Идет индексация",
+                    "details": "В данный момент происходит индексация товаров. Пожалуйста, подождите немного и попробуйте снова."
+                }
+            )
+
+        if not request or not request.products:
+            raise HTTPException(
+                status_code=400,
+                detail="Список товаров не может быть пустым"
+            )
+
+        logger.info(
+            f"Создание задачи создания товаров: {len(request.products)} товаров, "
+            f"brand={request.brand}"
+        )
+
+        task = await task_manager.create_task(
+            wb_token=token,
+            task_type=TaskType.PRODUCT_CREATE
+        )
+
+        background_tasks.add_task(
+            wb_client.create_products_background,
+            token,
+            request.products,
+            request.brand,
+            task
+        )
+
+        logger.info(
+            f"Задача создания товаров успешно создана: {task.task_id}, "
+            f"товаров={len(request.products)}, brand={request.brand}"
+        )
+
+        return TaskCreateResponse(
+            task_id=task.task_id,
+            task_type=task.task_type,
+            status=task.status,
+            message="Задача создания товаров успешно создана"
+        )
+
+    except TaskDatabaseError as e:
+        logger.error(f"Ошибка базы данных при создании задачи создания: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Сервис базы данных недоступен"
+        )
+
+    except ValueError as e:
+        logger.error(f"Ошибка валидации данных: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ошибка в данных запроса: {str(e)}"
+        )
+
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при создании задачи создания: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Внутренняя ошибка сервера"
