@@ -20,9 +20,7 @@ class ApiCategoryService:
 
     async def get_parent_categories(self, token: str) -> List[Dict[str, Any]]:
         """Получает родительские категории"""
-        response = await self.wb_api.make_request(
-            "GET",
-            "/content/v2/object/parent/all",
+        response = await self.wb_api.get_parent_categories(
             token
         )
         logger.info(f"Получили родительские категории. count: {len(response.get('data', []))}")
@@ -34,11 +32,11 @@ class ApiCategoryService:
             parent_id: str
     ) -> List[Dict[str, Any]]:
         """Получает дочерние категории по parent_id"""
-        response = await self.wb_api.make_request(
-            "GET",
-            "/content/v2/object/all",
+        response = await self.wb_api.get_children_categories(
             token,
-            params={"parentID": parent_id, "limit": 1000, "offset": 0}
+            parent_id=parent_id,
+            limit=1000,
+            offset=0
         )
         logger.info(
             f"Получили дочерние категории. parent_id: {parent_id} count: {len(response.get('data', []))}",

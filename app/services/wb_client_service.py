@@ -4,8 +4,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Set
 
-from watchfiles import awatch
-
 from app.constants.brands import BRANDS
 from app.exceptions.wb_api import WildberriesRateLimitError
 from app.schemas.product_create import ProductCreateItem
@@ -656,51 +654,6 @@ class WildberriesClient:
             "error_details": error_details_by_vendor_codes,
             "error_batches": relevant_errors
         }
-
-    async def get_all_errors_for_update(self, token: str, max_batches: int = 10000) -> List[Dict[str, Any]]:
-        """Получает все пакеты ошибок для полноценного мониторинга."""
-        all_error_batches = []
-        cursor = {"limit": 100}
-        iteration = 0
-
-        logger.info("Начало сбора всех ошибок обновления")
-
-        while iteration < max_batches:
-            body = {
-                "cursor": cursor,
-                "order": {"ascending": True}
-            }
-
-            response = await self.api.make_request(
-                "POST",
-                "/content/v2/cards/error/list",
-                token,
-                json=body
-            )
-
-            data = response.get("data", {})
-            items = data.get("items", [])
-
-            if not items:
-                break
-
-            all_error_batches.extend(items)
-
-            response_cursor = data.get("cursor", {})
-            if not response_cursor.get("next", False):
-                break
-
-            cursor = {
-                "limit": 100,
-                "updatedAt": response_cursor.get("updatedAt"),
-                "batchUUID": response_cursor.get("batchUUID")
-            }
-
-            iteration += 1
-            await asyncio.sleep(6)  # rate limit
-
-        logger.info(f"Сбор ошибок завершен: найдено {len(all_error_batches)} пакетов ошибок")
-        return all_error_batches
 
     async def create_products_background(
             self,

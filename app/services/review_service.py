@@ -170,15 +170,12 @@ class ReviewService:
                         f"{'(dateFrom=' + str(start_timestamp) + ')' if start_timestamp else ''}"
                     )
 
-                    response = await self.api_client.make_request(
-                        "GET",
-                        self.REVIEW_ENDPOINT,
+                    response = await self.api_client.get_reviews(
                         token,
                         params=params
                     )
 
-                    reviews = response.get("data", {}).get("feedbacks", [])
-
+                    reviews = response.get("feedbacks", [])
                     if not reviews:
                         logger.info(
                             f"Нет больше отзывов (skip={skip}). Загрузка завершена"

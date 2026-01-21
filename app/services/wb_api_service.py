@@ -71,7 +71,7 @@ class WildberriesAPI:
             "Accept": "application/json"
         }
 
-    async def make_request(
+    async def _make_request(
             self,
             method: str,
             endpoint: str,
@@ -167,7 +167,7 @@ class WildberriesAPI:
         """Получение одного товара с обработкой ошибок """
         return await WBErrorHandler.safe_api_call(
             operation_name="WB get_product",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/content/v2/get/cards/list",
                 token,
@@ -192,7 +192,7 @@ class WildberriesAPI:
         """Получение страницы товаров с пагинацией """
         return await WBErrorHandler.safe_api_call(
             operation_name="WB get_products_page",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/content/v2/get/cards/list",
                 token,
@@ -228,7 +228,7 @@ class WildberriesAPI:
 
         return await WBErrorHandler.safe_api_call(
             operation_name="WB update_products",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/content/v2/cards/update",
                 token,
@@ -297,7 +297,7 @@ class WildberriesAPI:
 
         return await WBErrorHandler.safe_api_call(
             operation_name="WB create_products",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/content/v2/cards/upload",
                 token,
@@ -325,7 +325,7 @@ class WildberriesAPI:
 
             result = await WBErrorHandler.safe_api_call(
                 operation_name=f"WB get_all_errors_for_update (iteration {iteration})",
-                api_call=lambda: self.make_request(
+                api_call=lambda: self._make_request(
                     "POST",
                     "/content/v2/cards/error/list",
                     token,
@@ -388,7 +388,7 @@ class WildberriesAPI:
 
             result = await WBErrorHandler.safe_api_call(
                 operation_name=f"WB get_all_errors_for_create (iteration {iteration})",
-                api_call=lambda: self.make_request(
+                api_call=lambda: self._make_request(
                     "POST",
                     "/content/v2/cards/error/list",
                     token,
@@ -462,7 +462,7 @@ class WildberriesAPI:
 
         return await WBErrorHandler.safe_api_call(
             operation_name=f"WB save_product_images (nmId={nm_id})",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/content/v3/media/save",
                 token,
@@ -496,7 +496,7 @@ class WildberriesAPI:
 
         return await WBErrorHandler.safe_api_call(
             operation_name="WB upload_prices",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "POST",
                 "/api/v2/upload/task",
                 token,
@@ -516,12 +516,113 @@ class WildberriesAPI:
         """Получение лимитов на создание товаров"""
         return await WBErrorHandler.safe_api_call(
             operation_name="WB get_create_limits",
-            api_call=lambda: self.make_request(
+            api_call=lambda: self._make_request(
                 "GET",
                 "/content/v2/cards/limits",
                 token
             ),
             success_transform=lambda r: WBErrorHandler.create_success_response(
                 data=r.get("data")
+            )
+        )
+
+    async def get_reviews(
+            self,
+            token: str,
+            params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Получение отзывов товаров через Reviews API.
+
+        Args:
+            token: API токен
+            params: Параметры запроса (take, skip, isAnswered, nmId, order, etc.)
+
+        Returns:
+            {status: "success"|"error", data: {"feedbacks": [...], ...}}
+        """
+        logger.info(f"Получение отзывов: params={params}")
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_reviews",
+            api_call=lambda: self._make_request(
+                "GET",
+                settings.REVIEWS_ENDPOINT,
+                token,
+                params=params
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data"),
+                feedbacks=r.get("data", {}).get("feedbacks", [])
+            )
+        )
+
+    async def get_parent_categories(
+            self,
+            token: str
+    ) -> Dict[str, Any]:
+        """
+        Получает родительские категории WB.
+
+        Args:
+            token: API токен
+
+        Returns:
+            {status: "success"|"error", data: [...]}
+        """
+        logger.info("Получение родительских категорий")
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_parent_categories",
+            api_call=lambda: self._make_request(
+                "GET",
+                "/content/v2/object/parent/all",
+                token
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data", []),
+                count=len(r.get("data", []))
+            )
+        )
+
+    async def get_children_categories(
+            self,
+            token: str,
+            parent_id: str,
+            limit: int = 1000,
+            offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Получает дочерние категории по parent_id.
+
+        Args:
+            token: API токен
+            parent_id: ID родительской категории
+            limit: Количество категорий (макс 1000)
+            offset: Смещение для пагинации
+
+        Returns:
+            {status: "success"|"error", data: [...]}
+        """
+        logger.info(f"Получение дочерних категорий: parent_id={parent_id}")
+
+        params = {
+            "parentID": parent_id,
+            "limit": min(limit, 1000),
+            "offset": offset
+        }
+
+        return await WBErrorHandler.safe_api_call(
+            operation_name="WB get_children_categories",
+            api_call=lambda: self._make_request(
+                "GET",
+                "/content/v2/object/all",
+                token,
+                params=params
+            ),
+            success_transform=lambda r: WBErrorHandler.create_success_response(
+                data=r.get("data", []),
+                count=len(r.get("data", [])),
+                parent_id=parent_id
             )
         )
