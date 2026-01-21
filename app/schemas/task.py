@@ -19,7 +19,7 @@ class TaskType(str, Enum):
     """Тип задачи"""
     PRODUCTS_INFO = "products_info"
     PRODUCT_UPDATE = "product_update"
-    PRODUCT_CREATE = "product_create"
+    PRODUCTS_CREATE = "products_create"
 
 
 class TaskInfo(BaseModel):
@@ -152,7 +152,7 @@ class TaskInfoResponse(BaseModel):
             data["category_ids"] = task.category_ids
             data["categories_count"] = task.categories_count
 
-        elif task.task_type == TaskType.PRODUCT_UPDATE:
+        elif task.task_type in (TaskType.PRODUCT_UPDATE, TaskType.PRODUCTS_CREATE):
             data["processed_items"] = task.processed_items
             if task.metadata:
                 check_results = task.metadata.get('check_results')

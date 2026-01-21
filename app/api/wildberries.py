@@ -511,7 +511,7 @@ async def create_products_create_task(
 
         task = await task_manager.create_task(
             wb_token=token,
-            task_type=TaskType.PRODUCT_CREATE
+            task_type=TaskType.PRODUCTS_CREATE
         )
 
         background_tasks.add_task(
