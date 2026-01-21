@@ -739,9 +739,12 @@ class WildberriesClient:
             for vendor_code in vendor_codes:
                 try:
                     clean_product = self._clean_product_document(
-                        vendor_code, es_products[vendor_code],
-                        rec_names[vendor_code], rec_descriptions[vendor_code],
-                        npr_data.get(vendor_code, {}), images[vendor_code]
+                        vendor_code=vendor_code,
+                        es_product=es_products[vendor_code],
+                        recommendation_name=rec_names[vendor_code],
+                        recommendation_description=rec_descriptions[vendor_code],
+                        npr_data=npr_data.get(vendor_code, {}),
+                        image=images[vendor_code]
                     )
                     prepare_products.append(clean_product)
                 except Exception as err:
